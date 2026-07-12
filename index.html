@@ -1133,7 +1133,8 @@ function showFinalOverlay(){
   document.getElementById('overlay').classList.add('show');
 }
 
-document.getElementById('overlayBtn').addEventListener('click', () => {
+document.getElementById('overlayBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
   SFX.tap();
   document.getElementById('overlay').classList.remove('show');
   player.wins = 0; cpu.wins = 0; roundNumber = 1;
@@ -1294,7 +1295,11 @@ function tick(){
 }
 
 document.querySelectorAll('.stageBtn').forEach(btn => {
-  btn.addEventListener('click', () => {
+  let picked = false;
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (picked) return; // guard against a duplicate pointerdown + click firing
+    picked = true;
     ensureAudio();
     SFX.tap();
     clearStage();
