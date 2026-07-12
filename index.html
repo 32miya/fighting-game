@@ -80,6 +80,32 @@
   .stageBtn[data-stage="volcano"]{ background:linear-gradient(160deg,#ff5a1a55,#3a181088); border-color:#ff8a50; }
   .stageBtn[data-stage="dojo"]{ background:linear-gradient(160deg,#a9743f55,#2a201888); border-color:#d8b06a; }
 
+  #modeSelect, #onlinePanel, #waitHostPanel{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#000d; z-index:31; flex-direction:column; gap:14px; text-align:center; padding:20px;
+  }
+  #modeSelect.hide, #onlinePanel.hide, #waitHostPanel.hide{ display:none; }
+  #modeSelect h1, #onlinePanel h1, #waitHostPanel h1{ font-size:clamp(18px,4.5vw,28px); margin:0 0 6px; letter-spacing:.05em; }
+  .menuBtn{
+    pointer-events:auto; font-size:15px; font-weight:700; padding:14px 30px; border-radius:16px;
+    border:2px solid #ffd23f; background:#ffd23f18; color:#ffd23f; letter-spacing:.05em;
+  }
+  .menuBtn:active{ background:#ffd23f33; }
+  .menuBtn.ghost{ border-color:#ffffff55; color:#ccc; background:transparent; font-size:13px; padding:10px 22px; }
+  #onlinePanel input{
+    font-size:16px; padding:10px 14px; border-radius:10px; border:2px solid #ffffff44;
+    background:#ffffff10; color:#fff; text-align:center; width:220px; letter-spacing:.05em;
+    pointer-events:auto;
+  }
+  #hostIdBox{ display:flex; flex-direction:column; gap:8px; align-items:center; }
+  #hostIdBox.hide{ display:none; }
+  #hostIdText{
+    font-size:22px; font-weight:800; letter-spacing:.12em; padding:10px 18px;
+    border:2px dashed #ffd23f; border-radius:10px; color:#ffd23f; background:#00000040;
+  }
+  .netDivider{ opacity:.55; font-size:12px; margin:4px 0; }
+  .netStatus{ font-size:13px; opacity:.85; min-height:18px; }
+
   #hint{
     position:absolute; bottom:6px; left:50%; transform:translateX(-50%);
     font-size:10px; opacity:.5; display:none; pointer-events:none;
@@ -141,7 +167,34 @@
     <button id="overlayBtn">START</button>
   </div>
 
-  <div id="stageSelect">
+  <div id="modeSelect">
+    <h1>対戦モードを選択</h1>
+    <button class="menuBtn" id="modeCpuBtn">CPUと対戦</button>
+    <button class="menuBtn" id="modeOnlineBtn">オンライン対戦 (P2P)</button>
+  </div>
+
+  <div id="onlinePanel" class="hide">
+    <h1>オンライン対戦</h1>
+    <button class="menuBtn" id="hostCreateBtn">部屋を作る（ホスト）</button>
+    <div id="hostIdBox" class="hide">
+      <p style="margin:0;opacity:.8;font-size:12px;">この番号を相手に伝えてください</p>
+      <div id="hostIdText">-----</div>
+      <button class="menuBtn ghost" id="copyIdBtn">コピー</button>
+      <p class="netStatus" id="hostStatus">相手の接続を待っています…</p>
+    </div>
+    <div class="netDivider">または</div>
+    <input id="joinIdInput" placeholder="相手のIDを入力" autocomplete="off" />
+    <button class="menuBtn" id="joinBtn">このIDに接続する</button>
+    <p class="netStatus" id="joinStatus"></p>
+    <button class="menuBtn ghost" id="onlineBackBtn">戻る</button>
+  </div>
+
+  <div id="waitHostPanel" class="hide">
+    <h1>接続しました</h1>
+    <p class="netStatus">ホストがステージを選択しています…</p>
+  </div>
+
+  <div id="stageSelect" class="hide">
     <h1>ステージを選択</h1>
     <div id="stageGrid">
       <button class="stageBtn" data-stage="colosseum">①<br>コロシアム<br><span style="font-weight:400;opacity:.75">床:砂</span></button>
@@ -169,6 +222,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
@@ -615,7 +669,10 @@ function updateCamera(){
   camera.lookAt(midX, 1.15, midZ);
 }
 let shakeUntil = 0, shakeMag = 0;
-function shake(mag, ms){ shakeUntil = performance.now() + ms; shakeMag = mag; }
+function shake(mag, ms){
+  shakeUntil = performance.now() + ms; shakeMag = mag;
+  if (Net.isHost) netSend({ t:'ev', name:'shake', mag, ms });
+}
 
 function faceOpponent(f){
   if (f.state === 'thrown' || f.state === 'down' || f.state === 'thrownDown') return;
@@ -746,6 +803,15 @@ const SFX = {
     playTone(ctx, { freq:700, type:'square', duration:0.03, gain:0.12 });
   },
 };
+// broadcast every SFX call (except the local-only button tap) to the guest when hosting online
+Object.keys(SFX).forEach(name => {
+  if (name === 'tap') return;
+  const original = SFX[name];
+  SFX[name] = function(...args){
+    original.apply(SFX, args);
+    if (Net.isHost) netSend({ t:'ev', name:'sfx', sfx:name });
+  };
+});
 
 /* =========================================================
    Combat: attacks
@@ -1066,6 +1132,7 @@ function animateThrow(f){
    ========================================================= */
 function flashHit(f){
   f.flashUntil = performance.now() + 140;
+  if (Net.isHost) netSend({ t:'ev', name:'flashHit', who: f === player ? 'p' : 'c' });
 }
 function updateFlash(f){
   const L = f.mesh.userData.limbs;
@@ -1086,6 +1153,7 @@ function flashCenterText(big, small, ms){
   centerText.classList.remove('show'); void centerText.offsetWidth; centerText.classList.add('show');
   centerText.querySelector('.big').style.opacity = 1;
   centerTimer = setTimeout(() => { centerText.querySelector('.big').style.opacity = 0; }, ms);
+  if (Net.isHost) netSend({ t:'ev', name:'centerText', big, small, ms });
 }
 
 /* =========================================================
@@ -1176,14 +1244,20 @@ function bindDir(id, dir){
     const now = performance.now();
     input[dir] = true;
     SFX.tap();
+    if (Net.isGuest) netSend({ t:'input', action:'moveHold', dir, held:true });
     if (now - lastTap[dir] < DOUBLE_TAP_MS && now - lastTap[dir] > 30){
-      handleDoubleTap(dir);
+      if (Net.isGuest) netSend({ t:'input', action:'doubleTap', dir });
+      else handleDoubleTap(player, dir);
       lastTap[dir] = 0;
     } else {
       lastTap[dir] = now;
     }
   };
-  const release = (e) => { e.preventDefault(); input[dir] = false; };
+  const release = (e) => {
+    e.preventDefault();
+    input[dir] = false;
+    if (Net.isGuest) netSend({ t:'input', action:'moveHold', dir, held:false });
+  };
   el.addEventListener('pointerdown', press);
   el.addEventListener('pointerup', release);
   el.addEventListener('pointerleave', release);
@@ -1191,53 +1265,68 @@ function bindDir(id, dir){
 }
 bindDir('dUp','up'); bindDir('dDown','down'); bindDir('dLeft','left'); bindDir('dRight','right');
 
-function handleDoubleTap(dir){
+function handleDoubleTap(f, dir){
   if (matchState !== 'fighting') return;
+  const o = other(f);
   if (dir === 'left' || dir === 'right'){
-    const towardDir = player.mesh.position.x <= cpu.mesh.position.x ? 'right' : 'left';
-    if (dir === towardDir) dashIn(player); else backstep(player);
+    const towardDir = f.mesh.position.x <= o.mesh.position.x ? 'right' : 'left';
+    if (dir === towardDir) dashIn(f); else backstep(f);
   } else if (dir === 'up'){
-    axisShift(player, -1);
+    axisShift(f, -1);
   } else {
-    axisShift(player, 1);
+    axisShift(f, 1);
   }
 }
 
-function bindAction(id, fn, isGuard){
+function bindAction(id, actionName, isGuard){
   const el = document.getElementById(id);
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     if (matchState !== 'fighting') return;
     SFX.tap();
     if (isGuard){
-      if (player.state === 'idle'){ player.guard = true; el.classList.add('active'); }
-    } else fn();
+      el.classList.add('active');
+      if (Net.isGuest) netSend({ t:'input', action:'guardOn' });
+      else if (player.state === 'idle') player.guard = true;
+    } else if (Net.isGuest){
+      netSend({ t:'input', action:actionName });
+    } else if (actionName === 'throw'){
+      tryThrow(player);
+    } else {
+      tryAttack(player, actionName);
+    }
   });
   if (isGuard){
-    const release = (e) => { e.preventDefault(); player.guard = false; el.classList.remove('active'); };
+    const release = (e) => {
+      e.preventDefault();
+      el.classList.remove('active');
+      if (Net.isGuest) netSend({ t:'input', action:'guardOff' });
+      else player.guard = false;
+    };
     el.addEventListener('pointerup', release);
     el.addEventListener('pointerleave', release);
     el.addEventListener('pointercancel', release);
   }
 }
-bindAction('btnA', () => tryAttack(player, 'punch'));
-bindAction('btnB', () => tryAttack(player, 'kick'));
+bindAction('btnA', 'punch');
+bindAction('btnB', 'kick');
 bindAction('btnC', null, true);
-bindAction('btnD', () => tryThrow(player));
+bindAction('btnD', 'throw');
 
 /* =========================================================
-   Player continuous walk (single hold) + CPU AI
+   Continuous walk (single hold) — shared by local player input
+   and, on the host, the remote guest's held directions.
    ========================================================= */
-function updatePlayerWalk(dt){
-  if (player.state !== 'idle' || player.posTween || matchState !== 'fighting') return;
+function updateWalk(f, src, dt){
+  if (f.state !== 'idle' || f.posTween || matchState !== 'fighting') return;
   const speed = 2.1, speedZ = 1.4;
-  if (input.left)  player.mesh.position.x -= speed * dt;
-  if (input.right) player.mesh.position.x += speed * dt;
-  if (input.up)    player.mesh.position.z -= speedZ * dt;
-  if (input.down)  player.mesh.position.z += speedZ * dt;
-  player.mesh.position.x = THREE.MathUtils.clamp(player.mesh.position.x, -ARENA_X, ARENA_X);
-  player.mesh.position.z = THREE.MathUtils.clamp(player.mesh.position.z, -ARENA_Z, ARENA_Z);
-  clampSeparation(player);
+  if (src.left)  f.mesh.position.x -= speed * dt;
+  if (src.right) f.mesh.position.x += speed * dt;
+  if (src.up)    f.mesh.position.z -= speedZ * dt;
+  if (src.down)  f.mesh.position.z += speedZ * dt;
+  f.mesh.position.x = THREE.MathUtils.clamp(f.mesh.position.x, -ARENA_X, ARENA_X);
+  f.mesh.position.z = THREE.MathUtils.clamp(f.mesh.position.z, -ARENA_Z, ARENA_Z);
+  clampSeparation(f);
 }
 
 function updateCpuAI(){
@@ -1274,6 +1363,151 @@ function updateCpuAI(){
 }
 
 /* =========================================================
+   Online: P2P via WebRTC (PeerJS + the free public 0.peerjs.com
+   signaling broker). The host runs the whole simulation and is
+   authoritative; the guest only sends its inputs and renders the
+   snapshots it receives — a thin client, not full rollback
+   netcode, so the guest sees host-RTT worth of extra latency.
+   ========================================================= */
+const Net = {
+  peer:null, conn:null, isOnline:false, isHost:false, isGuest:false,
+  remoteInput:{ left:false, right:false, up:false, down:false },
+};
+
+function netSend(obj){
+  if (Net.conn && Net.conn.open) Net.conn.send(obj);
+}
+
+function relabelHudForOnline(){
+  document.querySelector('#hud .hpRow:not(.right) .name').textContent = Net.isHost ? 'YOU' : 'OPPONENT';
+  document.querySelector('#hud .hpRow.right .name').textContent = Net.isHost ? 'OPPONENT' : 'YOU';
+}
+
+function netCreateRoom(){
+  document.getElementById('hostStatus').textContent = '接続準備中…';
+  Net.peer = new Peer();
+  Net.peer.on('open', id => {
+    document.getElementById('hostIdText').textContent = id;
+    document.getElementById('hostIdBox').classList.remove('hide');
+    document.getElementById('hostStatus').textContent = '相手の接続を待っています…';
+  });
+  Net.peer.on('connection', conn => {
+    Net.conn = conn; Net.isOnline = true; Net.isHost = true;
+    conn.on('open', () => {
+      document.getElementById('hostStatus').textContent = '接続しました！';
+      relabelHudForOnline();
+      setTimeout(() => {
+        document.getElementById('onlinePanel').classList.add('hide');
+        document.getElementById('stageSelect').classList.remove('hide');
+      }, 500);
+    });
+    conn.on('data', hostHandleMessage);
+    conn.on('close', netHandleDisconnect);
+  });
+  Net.peer.on('error', err => {
+    document.getElementById('hostStatus').textContent = '接続エラー: ' + err.type;
+  });
+}
+
+function netJoinRoom(hostId){
+  document.getElementById('joinStatus').textContent = '接続中…';
+  Net.peer = new Peer();
+  Net.peer.on('open', () => {
+    const conn = Net.peer.connect(hostId, { reliable:true });
+    Net.conn = conn; Net.isOnline = true; Net.isGuest = true;
+    conn.on('open', () => {
+      document.getElementById('joinStatus').textContent = '接続しました！';
+      relabelHudForOnline();
+      document.getElementById('onlinePanel').classList.add('hide');
+      document.getElementById('waitHostPanel').classList.remove('hide');
+    });
+    conn.on('data', guestHandleMessage);
+    conn.on('close', netHandleDisconnect);
+  });
+  Net.peer.on('error', err => {
+    document.getElementById('joinStatus').textContent = '接続エラー: ' + err.type;
+  });
+}
+
+function netHandleDisconnect(){
+  if (!Net.isOnline) return;
+  Net.isOnline = false;
+  flashCenterText('切断されました', '', 2500);
+}
+
+function serializeFighter(f){
+  return {
+    hp:f.hp, wins:f.wins, state:f.state, attackType:f.attackType,
+    attackStart:f.attackStart, attackResolved:f.attackResolved,
+    isDashAttack:f.isDashAttack, guard:f.guard,
+    hitstunUntil:f.hitstunUntil, downType:f.downType,
+    downStart: f.downStart != null ? f.downStart : null,
+    thrownDownStart: f.thrownDownStart != null ? f.thrownDownStart : null,
+    throwInfo: f.throwInfo ? { ...f.throwInfo } : null,
+    flashUntil:f.flashUntil,
+    x:f.mesh.position.x, z:f.mesh.position.z,
+  };
+}
+function applyFighterSnapshot(f, snap, offset){
+  f.hp = snap.hp; f.wins = snap.wins; f.state = snap.state; f.attackType = snap.attackType;
+  f.attackStart = snap.attackStart + offset;
+  f.attackResolved = snap.attackResolved;
+  f.isDashAttack = snap.isDashAttack;
+  f.guard = snap.guard;
+  f.hitstunUntil = snap.hitstunUntil + offset;
+  f.downType = snap.downType;
+  f.downStart = snap.downStart != null ? snap.downStart + offset : null;
+  f.thrownDownStart = snap.thrownDownStart != null ? snap.thrownDownStart + offset : null;
+  f.throwInfo = snap.throwInfo ? { ...snap.throwInfo, start: snap.throwInfo.start + offset } : null;
+  f.flashUntil = snap.flashUntil + offset;
+  f.netTargetX = snap.x; f.netTargetZ = snap.z;
+}
+
+let lastBroadcast = 0;
+function netBroadcastState(){
+  const now = performance.now();
+  if (now - lastBroadcast < 33) return; // ~30Hz
+  lastBroadcast = now;
+  netSend({
+    t:'state', now, matchState, roundNumber,
+    p: serializeFighter(player), c: serializeFighter(cpu),
+  });
+}
+
+function hostHandleMessage(msg){
+  if (msg.t !== 'input') return;
+  switch(msg.action){
+    case 'punch': tryAttack(cpu, 'punch'); break;
+    case 'kick': tryAttack(cpu, 'kick'); break;
+    case 'throw': tryThrow(cpu); break;
+    case 'guardOn': if (cpu.state === 'idle') cpu.guard = true; break;
+    case 'guardOff': cpu.guard = false; break;
+    case 'doubleTap': handleDoubleTap(cpu, msg.dir); break;
+    case 'moveHold': Net.remoteInput[msg.dir] = msg.held; break;
+  }
+}
+
+function guestHandleMessage(msg){
+  if (msg.t === 'state'){
+    const offset = performance.now() - msg.now;
+    matchState = msg.matchState;
+    roundNumber = msg.roundNumber;
+    applyFighterSnapshot(player, msg.p, offset);
+    applyFighterSnapshot(cpu, msg.c, offset);
+    updateHpUI(); updatePipsUI();
+  } else if (msg.t === 'ev'){
+    if (msg.name === 'centerText') flashCenterText(msg.big, msg.small, msg.ms);
+    else if (msg.name === 'sfx') SFX[msg.sfx]();
+    else if (msg.name === 'shake') shake(msg.mag, msg.ms);
+    else if (msg.name === 'flashHit') flashHit(msg.who === 'p' ? player : cpu);
+  } else if (msg.t === 'stageChosen'){
+    STAGE_DEFS[msg.stage].build(stageGroup);
+    document.getElementById('waitHostPanel').classList.add('hide');
+    tick();
+  }
+}
+
+/* =========================================================
    Main loop
    ========================================================= */
 const clock = new THREE.Clock();
@@ -1294,17 +1528,31 @@ function tick(){
   requestAnimationFrame(tick);
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  if (matchState === 'fighting'){
-    updatePlayerWalk(dt);
-    updateCpuAI();
+  if (Net.isGuest){
+    // thin client: no local sim — just smoothly follow the host's snapshots
+    [player, cpu].forEach(f => {
+      if (f.netTargetX != null){
+        f.mesh.position.x = THREE.MathUtils.lerp(f.mesh.position.x, f.netTargetX, 0.35);
+        f.mesh.position.z = THREE.MathUtils.lerp(f.mesh.position.z, f.netTargetZ, 0.35);
+      }
+    });
+  } else {
+    if (matchState === 'fighting'){
+      updateWalk(player, input, dt);
+      if (Net.isHost) updateWalk(cpu, Net.remoteInput, dt);
+      else updateCpuAI();
+    }
+    [player, cpu].forEach(f => {
+      if (f.state === 'attack' && !f.attackResolved){
+        const spec = f.attackType === 'kick' ? KICK : PUNCH;
+        if (performance.now() - f.attackStart >= spec.startup) resolveAttackHit(f);
+      }
+      applyTween(f);
+    });
+    if (Net.isHost) netBroadcastState();
   }
 
   [player, cpu].forEach(f => {
-    if (f.state === 'attack' && !f.attackResolved){
-      const spec = f.attackType === 'kick' ? KICK : PUNCH;
-      if (performance.now() - f.attackStart >= spec.startup) resolveAttackHit(f);
-    }
-    applyTween(f);
     animatePose(f);
     updateFlash(f);
     faceOpponent(f);
@@ -1325,9 +1573,47 @@ document.querySelectorAll('.stageBtn').forEach(btn => {
     clearStage();
     STAGE_DEFS[btn.dataset.stage].build(stageGroup);
     document.getElementById('stageSelect').classList.add('hide');
+    if (Net.isHost) netSend({ t:'stageChosen', stage: btn.dataset.stage });
     startRound();
     tick();
   });
+});
+
+document.getElementById('modeCpuBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  document.getElementById('modeSelect').classList.add('hide');
+  document.getElementById('stageSelect').classList.remove('hide');
+});
+document.getElementById('modeOnlineBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  document.getElementById('modeSelect').classList.add('hide');
+  document.getElementById('onlinePanel').classList.remove('hide');
+});
+document.getElementById('onlineBackBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (Net.peer){ Net.peer.destroy(); Net.peer = null; }
+  Net.conn = null; Net.isOnline = false; Net.isHost = false; Net.isGuest = false;
+  document.getElementById('onlinePanel').classList.add('hide');
+  document.getElementById('modeSelect').classList.remove('hide');
+});
+document.getElementById('hostCreateBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  ensureAudio();
+  e.currentTarget.disabled = true;
+  netCreateRoom();
+});
+document.getElementById('joinBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  ensureAudio();
+  const id = document.getElementById('joinIdInput').value.trim();
+  if (!id) return;
+  e.currentTarget.disabled = true;
+  netJoinRoom(id);
+});
+document.getElementById('copyIdBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  const id = document.getElementById('hostIdText').textContent;
+  navigator.clipboard?.writeText(id).catch(() => {});
 });
 </script>
 </body>
