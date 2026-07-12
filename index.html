@@ -112,6 +112,14 @@
   }
   @media (orientation:portrait){ #hint{ display:block; } }
 
+  #errBanner{
+    display:none; position:fixed; left:0; right:0; bottom:0; max-height:35%;
+    background:#a00000ee; color:#fff; font-size:11px; line-height:1.4;
+    padding:8px 10px calc(8px + env(safe-area-inset-bottom,0));
+    z-index:9999; word-break:break-all; overflow-y:auto; pointer-events:none;
+  }
+  #errBanner.show{ display:block; }
+
   /* ---------- Controls ---------- */
   #controls{
     position:absolute; left:0; right:0; bottom:0;
@@ -160,6 +168,7 @@
 
   <div id="centerText"><div class="big"></div><div class="small"></div></div>
   <div id="hint">横向き表示推奨 / Rotate for best experience</div>
+  <div id="errBanner"></div>
 
   <div id="overlay">
     <h1 id="overlayTitle">3D POLYGON FIGHTER</h1>
@@ -229,6 +238,17 @@
 </script>
 <script type="module">
 import * as THREE from 'three';
+
+/* Surface otherwise-silent runtime errors on-screen — there's no console
+   access on a phone, so this is how a broken background/audio/etc. gets
+   diagnosed instead of just failing invisibly. */
+function showErrBanner(msg){
+  const el = document.getElementById('errBanner');
+  el.textContent = 'ERR: ' + String(msg).slice(0, 300);
+  el.classList.add('show');
+}
+addEventListener('error', (e) => showErrBanner(e.message));
+addEventListener('unhandledrejection', (e) => showErrBanner(e.reason && e.reason.message ? e.reason.message : e.reason));
 
 /* =========================================================
    Renderer / Scene / Camera
@@ -1677,10 +1697,9 @@ document.querySelectorAll('.stageBtn').forEach(btn => {
     e.preventDefault();
     if (picked) return; // guard against a duplicate pointerdown + click firing
     picked = true;
-    ensureAudio();
-    SFX.tap();
-    clearStage();
-    STAGE_DEFS[btn.dataset.stage].build(stageGroup);
+    try { ensureAudio(); SFX.tap(); } catch (err) { console.error('audio init failed:', err); showErrBanner('audio: ' + err.message); }
+    try { clearStage(); STAGE_DEFS[btn.dataset.stage].build(stageGroup); }
+    catch (err) { console.error('stage build failed:', err); showErrBanner('stage: ' + err.message); }
     document.getElementById('stageSelect').classList.add('hide');
     if (Net.isHost) netSend({ t:'stageChosen', stage: btn.dataset.stage });
     startRound();
