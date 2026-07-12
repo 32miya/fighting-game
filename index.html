@@ -6,7 +6,11 @@
 <title>3D POLYGON FIGHTER</title>
 <style>
   :root{ color-scheme: dark; }
-  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  *{
+    box-sizing:border-box; -webkit-tap-highlight-color:transparent;
+    touch-action:none; user-select:none; -webkit-user-select:none;
+    -webkit-touch-callout:none; -webkit-user-drag:none;
+  }
   html,body{
     margin:0; padding:0; width:100%; height:100%; overflow:hidden;
     background:#0b0d14; color:#eef2ff;
@@ -192,6 +196,22 @@ function resize(){
 }
 addEventListener('resize', resize);
 resize();
+
+/* =========================================================
+   Lock down mobile browser gestures that fight the game UI:
+   pinch-zoom, double-tap-zoom, long-press callouts, drag, etc.
+   ========================================================= */
+document.addEventListener('gesturestart', (e) => e.preventDefault());
+document.addEventListener('gesturechange', (e) => e.preventDefault());
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+document.addEventListener('dragstart', (e) => e.preventDefault());
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
+let lastTouchEnd = 0;
+document.addEventListener('touchend', (e) => {
+  const now = Date.now();
+  if (now - lastTouchEnd <= 300) e.preventDefault();
+  lastTouchEnd = now;
+}, { passive:false });
 
 const hemiLight = new THREE.HemisphereLight(0xaabbff, 0x1a1420, 0.9);
 scene.add(hemiLight);
