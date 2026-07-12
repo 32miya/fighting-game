@@ -280,7 +280,27 @@ const textureLoader = new THREE.TextureLoader();
 function setStageBackground(path, fogColor, fogNear, fogFar){
   scene.background = new THREE.Color(fogColor); // shown instantly while the photo loads in
   scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
-  textureLoader.load(path, (tex) => { tex.colorSpace = THREE.SRGBColorSpace; scene.background = tex; });
+  const applyTexture = (tex) => {
+    // NPOT-safe settings: some mobile GPUs/WebGL1 contexts silently fail to
+    // mipmap a non-power-of-two image, leaving scene.background on the
+    // fallback color instead of throwing a visible error.
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    scene.background = tex;
+  };
+  textureLoader.load(path, applyTexture, undefined, () => {
+    // transient mobile-network hiccup — retry once before giving up
+    setTimeout(() => {
+      textureLoader.load(path, applyTexture, undefined, (err) => {
+        console.error('stage background failed to load:', path, err);
+      });
+    }, 1200);
+  });
 }
 
 const STAGE_DEFS = {
