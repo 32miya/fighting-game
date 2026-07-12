@@ -741,12 +741,14 @@ function playTone(ctx, { freq=440, type='sine', duration=0.15, gain=0.3, freqEnd
 
 const SFX = {
   punch(){ const ctx = ensureAudio();
-    playNoise(ctx, { duration:0.08, filterFreq:1800, filterType:'bandpass', gain:0.55 });
-    playTone(ctx, { freq:160, type:'sine', duration:0.12, gain:0.5, freqEnd:60 });
+    playNoise(ctx, { duration:0.04, filterFreq:2800, filterType:'highpass', gain:0.2 }); // brief crack
+    playNoise(ctx, { duration:0.16, filterFreq:450, filterType:'lowpass', gain:0.55 }); // meaty body
+    playTone(ctx, { freq:110, type:'sine', duration:0.2, gain:0.7, freqEnd:35 }); // low thump
   },
   kick(){ const ctx = ensureAudio();
-    playNoise(ctx, { duration:0.12, filterFreq:900, filterType:'bandpass', gain:0.6 });
-    playTone(ctx, { freq:110, type:'sine', duration:0.18, gain:0.55, freqEnd:45 });
+    playNoise(ctx, { duration:0.05, filterFreq:2200, filterType:'highpass', gain:0.2 });
+    playNoise(ctx, { duration:0.22, filterFreq:320, filterType:'lowpass', gain:0.6 });
+    playTone(ctx, { freq:80, type:'sine', duration:0.26, gain:0.75, freqEnd:28 });
   },
   guard(){ const ctx = ensureAudio();
     playNoise(ctx, { duration:0.05, filterFreq:2600, filterType:'highpass', gain:0.35 });
