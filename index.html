@@ -618,7 +618,7 @@ let shakeUntil = 0, shakeMag = 0;
 function shake(mag, ms){ shakeUntil = performance.now() + ms; shakeMag = mag; }
 
 function faceOpponent(f){
-  if (f.state === 'thrown' || f.state === 'down') return;
+  if (f.state === 'thrown' || f.state === 'down' || f.state === 'thrownDown') return;
   const o = other(f);
   // keep target at the fighter's own height so this is a pure yaw (turn to face),
   // never a pitch — otherwise the whole body tips forward/back like a falling pole.
@@ -776,7 +776,7 @@ function resolveAttackHit(attacker){
   const dx = Math.abs(attacker.mesh.position.x - defender.mesh.position.x);
   const dz = Math.abs(attacker.mesh.position.z - defender.mesh.position.z);
 
-  if (dx > spec.reach || dz > 0.75 || defender.state === 'thrown'){
+  if (dx > spec.reach || dz > 0.75 || defender.state === 'thrown' || defender.state === 'thrownDown'){
     flashCenterText('MISS', '', 500);
     SFX.miss();
     return; // evaded via axis-shift / backstep / range
@@ -959,6 +959,24 @@ function animatePose(f){
     return;
   }
 
+  if (f.state === 'thrownDown'){
+    // stay down for a beat after landing so a throw clearly reads as a throw,
+    // instead of popping back upright immediately.
+    const THROWN_DOWN_MS = 700, GET_UP_MS = 220;
+    const elapsed = now - f.thrownDownStart;
+    const downT = THREE.MathUtils.clamp(elapsed / 130, 0, 1);
+    const upT = THREE.MathUtils.clamp((elapsed - (THROWN_DOWN_MS - GET_UP_MS)) / GET_UP_MS, 0, 1);
+    const lieAmount = downT * (1 - upT);
+    f.mesh.rotation.x = lerp(0, Math.PI/2*0.85, lieAmount);
+    f.mesh.position.y = lerp(0, 0.16, lieAmount);
+    if (elapsed >= THROWN_DOWN_MS){
+      f.mesh.rotation.set(0,0,0);
+      f.mesh.position.y = 0;
+      f.state = 'idle';
+    }
+    return;
+  }
+
   if (f.state === 'hitstun'){
     L.chest.rotation.x = lerp(L.chest.rotation.x, STANCE.chestLeanX + 0.35, 0.3);
     L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX - 0.5, 0.3);
@@ -1024,13 +1042,15 @@ function animateThrow(f){
     if (t >= 1){
       f.mesh.position.y = 0;
       f.mesh.rotation.set(0,0,0);
-      f.state = 'hitstun';
-      f.hitstunUntil = now + 300;
       f.throwInfo = null;
       if (!data.applied){
         data.applied = true;
         SFX.throwHit();
-        applyDamage(f, data.dmg, 'throw');
+        applyDamage(f, data.dmg, 'throw'); // may set f.state = 'down' if this KOs
+      }
+      if (f.state !== 'down'){
+        f.state = 'thrownDown';
+        f.thrownDownStart = now;
       }
     }
   } else {
