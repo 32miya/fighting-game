@@ -177,13 +177,14 @@
     <h1>オンライン対戦</h1>
     <button class="menuBtn" id="hostCreateBtn">部屋を作る（ホスト）</button>
     <div id="hostIdBox" class="hide">
-      <p style="margin:0;opacity:.8;font-size:12px;">この番号を相手に伝えてください</p>
+      <p style="margin:0;opacity:.8;font-size:12px;">この番号を相手に伝えてください（3分以内に接続がなければ自動的に閉じます）</p>
       <div id="hostIdText">-----</div>
       <button class="menuBtn ghost" id="copyIdBtn">コピー</button>
       <p class="netStatus" id="hostStatus">相手の接続を待っています…</p>
+      <button class="menuBtn ghost" id="disbandBtn">部屋を解散する</button>
     </div>
     <div class="netDivider">または</div>
-    <input id="joinIdInput" placeholder="相手のIDを入力" autocomplete="off" />
+    <input id="joinIdInput" placeholder="相手の6桁IDを入力" autocomplete="off" maxlength="6" inputmode="numeric" pattern="[0-9]*" />
     <button class="menuBtn" id="joinBtn">このIDに接続する</button>
     <p class="netStatus" id="joinStatus"></p>
     <button class="menuBtn ghost" id="onlineBackBtn">戻る</button>
@@ -1241,6 +1242,7 @@ function bindDir(id, dir){
   const el = document.getElementById(id);
   const press = (e) => {
     e.preventDefault();
+    if (Net.isSpectator) return; // spectators are view-only
     const now = performance.now();
     input[dir] = true;
     SFX.tap();
@@ -1255,6 +1257,7 @@ function bindDir(id, dir){
   };
   const release = (e) => {
     e.preventDefault();
+    if (Net.isSpectator) return;
     input[dir] = false;
     if (Net.isGuest) netSend({ t:'input', action:'moveHold', dir, held:false });
   };
@@ -1282,7 +1285,7 @@ function bindAction(id, actionName, isGuard){
   const el = document.getElementById(id);
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    if (matchState !== 'fighting') return;
+    if (matchState !== 'fighting' || Net.isSpectator) return;
     SFX.tap();
     if (isGuard){
       el.classList.add('active');
@@ -1299,6 +1302,7 @@ function bindAction(id, actionName, isGuard){
   if (isGuard){
     const release = (e) => {
       e.preventDefault();
+      if (Net.isSpectator) return;
       el.classList.remove('active');
       if (Net.isGuest) netSend({ t:'input', action:'guardOff' });
       else player.guard = false;
@@ -1369,42 +1373,93 @@ function updateCpuAI(){
    snapshots it receives — a thin client, not full rollback
    netcode, so the guest sees host-RTT worth of extra latency.
    ========================================================= */
+const ROOM_EXPIRY_MS = 180000; // 3 minutes — abandoned (no player2 yet) rooms auto-close
+const MAX_SPECTATORS = 4;
+
 const Net = {
-  peer:null, conn:null, isOnline:false, isHost:false, isGuest:false,
+  peer:null, conn:null, isOnline:false, isHost:false, isGuest:false, isSpectator:false,
+  guestConn:null, spectatorConns:[], expiryTimer:null,
   remoteInput:{ left:false, right:false, up:false, down:false },
 };
 
 function netSend(obj){
-  if (Net.conn && Net.conn.open) Net.conn.send(obj);
+  if (Net.isHost){
+    if (Net.guestConn && Net.guestConn.open) Net.guestConn.send(obj);
+    Net.spectatorConns.forEach(c => { if (c.open) c.send(obj); });
+  } else if (Net.conn && Net.conn.open){
+    Net.conn.send(obj);
+  }
+}
+
+function generateRoomCode(){
+  return String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
 }
 
 function relabelHudForOnline(){
-  document.querySelector('#hud .hpRow:not(.right) .name').textContent = Net.isHost ? 'YOU' : 'OPPONENT';
-  document.querySelector('#hud .hpRow.right .name').textContent = Net.isHost ? 'OPPONENT' : 'YOU';
+  const leftName = document.querySelector('#hud .hpRow:not(.right) .name');
+  const rightName = document.querySelector('#hud .hpRow.right .name');
+  if (Net.isSpectator){ leftName.textContent = 'P1'; rightName.textContent = 'P2'; }
+  else if (Net.isHost){ leftName.textContent = 'YOU'; rightName.textContent = 'OPPONENT'; }
+  else { leftName.textContent = 'OPPONENT'; rightName.textContent = 'YOU'; }
 }
 
-function netCreateRoom(){
+function updateHostStatusText(){
+  const base = Net.guestConn ? '接続しました！' : '相手の接続を待っています…';
+  const spec = ` / 観戦者 ${Net.spectatorConns.length}/${MAX_SPECTATORS}`;
+  document.getElementById('hostStatus').textContent = base + spec;
+}
+
+function netCreateRoom(attempt){
+  attempt = attempt || 0;
   document.getElementById('hostStatus').textContent = '接続準備中…';
-  Net.peer = new Peer();
-  Net.peer.on('open', id => {
+  const peer = new Peer(generateRoomCode());
+  Net.peer = peer;
+
+  peer.on('open', id => {
     document.getElementById('hostIdText').textContent = id;
     document.getElementById('hostIdBox').classList.remove('hide');
-    document.getElementById('hostStatus').textContent = '相手の接続を待っています…';
+    updateHostStatusText();
+    Net.expiryTimer = setTimeout(() => {
+      if (!Net.guestConn) netDisbandRoom('timeout');
+    }, ROOM_EXPIRY_MS);
   });
-  Net.peer.on('connection', conn => {
-    Net.conn = conn; Net.isOnline = true; Net.isHost = true;
-    conn.on('open', () => {
-      document.getElementById('hostStatus').textContent = '接続しました！';
-      relabelHudForOnline();
-      setTimeout(() => {
-        document.getElementById('onlinePanel').classList.add('hide');
-        document.getElementById('stageSelect').classList.remove('hide');
-      }, 500);
-    });
-    conn.on('data', hostHandleMessage);
-    conn.on('close', netHandleDisconnect);
+
+  peer.on('connection', conn => {
+    if (!Net.guestConn){
+      Net.guestConn = conn; Net.isOnline = true; Net.isHost = true;
+      if (Net.expiryTimer){ clearTimeout(Net.expiryTimer); Net.expiryTimer = null; }
+      conn.on('open', () => {
+        conn.send({ t:'role', role:'player2' });
+        updateHostStatusText();
+        relabelHudForOnline();
+        setTimeout(() => {
+          document.getElementById('onlinePanel').classList.add('hide');
+          document.getElementById('stageSelect').classList.remove('hide');
+        }, 500);
+      });
+      conn.on('data', msg => hostHandleMessage(msg, conn));
+      conn.on('close', () => { Net.guestConn = null; netDisbandRoom('guestLeft'); });
+    } else if (Net.spectatorConns.length < MAX_SPECTATORS){
+      conn.on('open', () => {
+        Net.spectatorConns.push(conn);
+        conn.send({ t:'role', role:'spectator' });
+        updateHostStatusText();
+      });
+      conn.on('data', msg => hostHandleMessage(msg, conn));
+      conn.on('close', () => {
+        Net.spectatorConns = Net.spectatorConns.filter(c => c !== conn);
+        updateHostStatusText();
+      });
+    } else {
+      conn.on('open', () => {
+        conn.send({ t:'full' });
+        setTimeout(() => conn.close(), 300);
+      });
+    }
   });
-  Net.peer.on('error', err => {
+
+  peer.on('error', err => {
+    if (err.type === 'unavailable-id' && attempt < 5){ netCreateRoom(attempt + 1); return; }
     document.getElementById('hostStatus').textContent = '接続エラー: ' + err.type;
   });
 }
@@ -1416,10 +1471,7 @@ function netJoinRoom(hostId){
     const conn = Net.peer.connect(hostId, { reliable:true });
     Net.conn = conn; Net.isOnline = true; Net.isGuest = true;
     conn.on('open', () => {
-      document.getElementById('joinStatus').textContent = '接続しました！';
-      relabelHudForOnline();
-      document.getElementById('onlinePanel').classList.add('hide');
-      document.getElementById('waitHostPanel').classList.remove('hide');
+      document.getElementById('joinStatus').textContent = '接続しました！役割を確認中…';
     });
     conn.on('data', guestHandleMessage);
     conn.on('close', netHandleDisconnect);
@@ -1428,6 +1480,37 @@ function netJoinRoom(hostId){
     document.getElementById('joinStatus').textContent = '接続エラー: ' + err.type;
   });
 }
+
+// Full teardown used for an explicit disband, the 3-minute abandoned-room
+// timeout, the guest leaving, or backing out of the online menu — always
+// notifies whoever is still connected before closing everything.
+function netDisbandRoom(reason){
+  netSend({ t:'roomClosed', reason });
+  if (Net.guestConn) Net.guestConn.close();
+  Net.spectatorConns.forEach(c => c.close());
+  Net.spectatorConns = [];
+  Net.guestConn = null;
+  if (Net.conn) Net.conn.close();
+  Net.conn = null;
+  if (Net.expiryTimer){ clearTimeout(Net.expiryTimer); Net.expiryTimer = null; }
+  if (Net.peer){ Net.peer.destroy(); Net.peer = null; }
+  Net.isOnline = false; Net.isHost = false; Net.isGuest = false; Net.isSpectator = false;
+
+  document.getElementById('stageSelect').classList.add('hide');
+  document.getElementById('waitHostPanel').classList.add('hide');
+  document.getElementById('onlinePanel').classList.add('hide');
+  document.getElementById('hostIdBox').classList.add('hide');
+  document.getElementById('hostIdText').textContent = '-----';
+  document.getElementById('controls').style.display = '';
+  document.getElementById('modeSelect').classList.remove('hide');
+  if (reason === 'timeout') flashCenterText('ルームの有効期限が切れました', '', 2500);
+}
+
+addEventListener('pagehide', () => {
+  if (!Net.peer) return;
+  try { netSend({ t:'roomClosed', reason:'left' }); } catch(e){}
+  Net.peer.destroy();
+});
 
 function netHandleDisconnect(){
   if (!Net.isOnline) return;
@@ -1474,8 +1557,9 @@ function netBroadcastState(){
   });
 }
 
-function hostHandleMessage(msg){
+function hostHandleMessage(msg, conn){
   if (msg.t !== 'input') return;
+  if (conn !== Net.guestConn) return; // spectators can't act — only the designated player2 can
   switch(msg.action){
     case 'punch': tryAttack(cpu, 'punch'); break;
     case 'kick': tryAttack(cpu, 'kick'); break;
@@ -1504,6 +1588,31 @@ function guestHandleMessage(msg){
     STAGE_DEFS[msg.stage].build(stageGroup);
     document.getElementById('waitHostPanel').classList.add('hide');
     tick();
+  } else if (msg.t === 'role'){
+    Net.isSpectator = msg.role === 'spectator';
+    relabelHudForOnline();
+    document.getElementById('joinStatus').textContent = Net.isSpectator ? '観戦者として接続しました！' : '対戦相手として接続しました！';
+    if (Net.isSpectator) document.getElementById('controls').style.display = 'none';
+    document.getElementById('onlinePanel').classList.add('hide');
+    document.getElementById('waitHostPanel').classList.remove('hide');
+  } else if (msg.t === 'full'){
+    document.getElementById('joinStatus').textContent = '満員です（観戦者の上限に達しています）';
+    if (Net.conn) Net.conn.close();
+    if (Net.peer){ Net.peer.destroy(); Net.peer = null; }
+    Net.isOnline = false; Net.isGuest = false;
+  } else if (msg.t === 'roomClosed'){
+    const reasonText = msg.reason === 'timeout' ? 'ルームが期限切れになりました' : 'ルームが解散されました';
+    flashCenterText(reasonText, '', 2500);
+    if (Net.conn) Net.conn.close();
+    if (Net.peer){ Net.peer.destroy(); Net.peer = null; }
+    Net.isOnline = false; Net.isGuest = false; Net.isSpectator = false;
+    setTimeout(() => {
+      document.getElementById('waitHostPanel').classList.add('hide');
+      document.getElementById('onlinePanel').classList.add('hide');
+      document.getElementById('stageSelect').classList.add('hide');
+      document.getElementById('controls').style.display = '';
+      document.getElementById('modeSelect').classList.remove('hide');
+    }, 1500);
   }
 }
 
@@ -1591,15 +1700,19 @@ document.getElementById('modeOnlineBtn').addEventListener('pointerdown', (e) => 
 });
 document.getElementById('onlineBackBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
-  if (Net.peer){ Net.peer.destroy(); Net.peer = null; }
-  Net.conn = null; Net.isOnline = false; Net.isHost = false; Net.isGuest = false;
-  document.getElementById('onlinePanel').classList.add('hide');
-  document.getElementById('modeSelect').classList.remove('hide');
+  if (Net.peer) netDisbandRoom('cancelled');
+  else {
+    document.getElementById('onlinePanel').classList.add('hide');
+    document.getElementById('modeSelect').classList.remove('hide');
+  }
+});
+document.getElementById('disbandBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  netDisbandRoom('hostClosed');
 });
 document.getElementById('hostCreateBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   ensureAudio();
-  e.currentTarget.disabled = true;
   netCreateRoom();
 });
 document.getElementById('joinBtn').addEventListener('pointerdown', (e) => {
@@ -1607,7 +1720,6 @@ document.getElementById('joinBtn').addEventListener('pointerdown', (e) => {
   ensureAudio();
   const id = document.getElementById('joinIdInput').value.trim();
   if (!id) return;
-  e.currentTarget.disabled = true;
   netJoinRoom(id);
 });
 document.getElementById('copyIdBtn').addEventListener('pointerdown', (e) => {
