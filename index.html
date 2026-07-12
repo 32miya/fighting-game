@@ -880,7 +880,7 @@ function resetPose(f){
 // Punch goes further still (measured against the opponent's chest height from the crouched
 // stance) so the fist lands at chest level instead of reading as a low body-shot.
 const PUNCH_POSE = { shoulder:-(104 * Math.PI/180), elbow:0.05 };
-const KICK_POSE  = { hip:-Math.PI/2, knee:0.05 };
+const KICK_POSE  = { hip:-Math.PI/2, knee:0.05, hipYaw:0.6, waistYaw:0.35 };
 
 function blendStance(f, rate){
   const L = f.mesh.userData.limbs;
@@ -891,6 +891,8 @@ function blendStance(f, rate){
   L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, rate);
   L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, rate);
   L.legL.knee.rotation.x = lerp(L.legL.knee.rotation.x, STANCE.backKneeX, rate);
+  L.legL.hip.rotation.y = lerp(L.legL.hip.rotation.y, 0, rate);
+  L.hips.rotation.y = lerp(L.hips.rotation.y, 0, rate);
   L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX + guardT*0.15, rate);
   L.armL.shoulder.rotation.z = lerp(L.armL.shoulder.rotation.z, STANCE.shoulderZ, rate);
   L.armL.elbow.rotation.x = lerp(L.armL.elbow.rotation.x, STANCE.elbowX, rate);
@@ -917,9 +919,13 @@ function animatePose(f){
     else swing = 1 - (t-activeEndT)/(1-activeEndT);
 
     if (f.attackType === 'kick'){
-      // rear leg (legL, structurally back) chambers at the hip and snaps the knee straight
+      // rear leg (legL, structurally back) chambers at the hip and snaps the knee straight,
+      // with the hip and waist yawing into it so it arcs around like a roundhouse instead
+      // of just swinging straight up, letting it reach the opponent's upper body.
       L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip, swing);
       L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
+      L.legL.hip.rotation.y = lerp(0, KICK_POSE.hipYaw, swing);
+      L.hips.rotation.y = lerp(0, KICK_POSE.waistYaw, swing);
       L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
       L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
       L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.15, swing);
