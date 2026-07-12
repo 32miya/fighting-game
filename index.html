@@ -400,7 +400,7 @@ function setStageBackground(path, fogColor, fogNear, fogFar){
 
 const STAGE_DEFS = {
   colosseum: { name:'① コロシアム', build(g){
-    setStageBackground('assets/stages/colosseum.jpg', 0x8a7550, 16, 38);
+    setStageBackground('assets/stages/colosseum.jpg?v=2', 0x8a7550, 16, 38);
     lightAtmosphere(0xffe9c2, 0xcbb07a, 1.0, 0xfff3d0, 1.1);
 
     const floor = new THREE.Mesh(new THREE.CircleGeometry(9, 48),
@@ -412,7 +412,7 @@ const STAGE_DEFS = {
   }},
 
   beach: { name:'② 夕日の砂浜', build(g){
-    setStageBackground('assets/stages/beach.jpg', 0xd97a4a, 12, 34);
+    setStageBackground('assets/stages/beach.jpg?v=2', 0xd97a4a, 12, 34);
     lightAtmosphere(0xffb37a, 0xd7a45a, 1.0, 0xffb070, 1.2);
 
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(50, 50),
@@ -434,7 +434,7 @@ const STAGE_DEFS = {
   }},
 
   dome: { name:'③ 東京ドーム', build(g){
-    setStageBackground('assets/stages/dome.jpg', 0x18181f, 16, 34);
+    setStageBackground('assets/stages/dome.jpg?v=2', 0x18181f, 16, 34);
     lightAtmosphere(0xbcd0ff, 0x202030, 0.8, 0xffffff, 1.3);
 
     const floor = new THREE.Mesh(new THREE.CircleGeometry(20, 32), new THREE.MeshStandardMaterial({ color:0x0e0e14, roughness:1 }));
@@ -461,7 +461,7 @@ const STAGE_DEFS = {
   }},
 
   grass: { name:'④ 草原', build(g){
-    setStageBackground('assets/stages/grass.jpg', 0xcf9a55, 18, 42);
+    setStageBackground('assets/stages/grass.jpg?v=2', 0xcf9a55, 18, 42);
     lightAtmosphere(0xffe9c0, 0x4a7c3a, 1.05, 0xfff6dd, 1.15);
 
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(70, 70),
@@ -470,7 +470,7 @@ const STAGE_DEFS = {
   }},
 
   volcano: { name:'⑤ 噴火した山', build(g){
-    setStageBackground('assets/stages/volcano.jpg', 0x3a1810, 10, 30);
+    setStageBackground('assets/stages/volcano.jpg?v=2', 0x3a1810, 10, 30);
     lightAtmosphere(0xff8a50, 0x2a1810, 0.9, 0xff7a3a, 1.3);
 
     const floor = new THREE.Mesh(new THREE.CircleGeometry(9, 48), new THREE.MeshStandardMaterial({ map: stoneTexture(), roughness:1 }));
@@ -491,7 +491,7 @@ const STAGE_DEFS = {
   }},
 
   dojo: { name:'⑥ 道場', build(g){
-    setStageBackground('assets/stages/dojo.jpg', 0x2a1f16, 14, 32);
+    setStageBackground('assets/stages/dojo.jpg?v=2', 0x2a1f16, 14, 32);
     lightAtmosphere(0xfff0d0, 0x6b4a2f, 1.0, 0xffe8c0, 1.15);
 
     const floor = new THREE.Mesh(new THREE.CircleGeometry(9, 48), new THREE.MeshStandardMaterial({ map: woodTexture(), roughness:0.7 }));
