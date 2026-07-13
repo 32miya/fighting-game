@@ -1612,14 +1612,30 @@ function showComboCounter(n){
 
 const centerText = document.getElementById('centerText');
 let centerTimer = null;
-function flashCenterText(big, small, ms){
+function flashCenterText(big, small, ms, skipBroadcast){
   clearTimeout(centerTimer);
   centerText.querySelector('.big').textContent = big;
   centerText.querySelector('.small').textContent = small;
   centerText.classList.remove('show'); void centerText.offsetWidth; centerText.classList.add('show');
   centerText.querySelector('.big').style.opacity = 1;
   centerTimer = setTimeout(() => { centerText.querySelector('.big').style.opacity = 0; }, ms);
-  if (Net.isHost) netSend({ t:'ev', name:'centerText', big, small, ms });
+  // skipBroadcast: used for perspective-specific text (round/match win-lose) — the host's own
+  // wording ("YOU WIN") would be wrong if relayed verbatim to the guest, who lost. Those callers
+  // broadcast a neutral fact instead and let each client render its own perspective-correct text.
+  if (Net.isHost && !skipBroadcast) netSend({ t:'ev', name:'centerText', big, small, ms });
+}
+
+// Perspective-aware win/lose phrasing. winnerIsPlayerObj is an OBJECTIVE fact (did the `player`
+// object — which is always the host's fighter — win), independent of who's looking at the screen;
+// each client (host/guest/spectator) turns that fact into wording that makes sense from where
+// THEY sit, since a guest seeing "YOU WIN" when the host actually won would be actively wrong.
+function describeOutcome(winnerIsPlayerObj, isMatchEnd){
+  const scope = isMatchEnd ? 'THE MATCH' : 'ROUND';
+  if (Net.isSpectator) return (winnerIsPlayerObj ? 'P1' : 'P2') + ' WINS ' + scope;
+  const iWon = Net.isGuest ? !winnerIsPlayerObj : winnerIsPlayerObj;
+  if (iWon) return 'YOU WIN ' + scope + (isMatchEnd ? '!' : '');
+  if (Net.isOnline) return 'YOU LOSE ' + scope;
+  return 'CPU WINS ' + scope; // offline vs CPU — unchanged framing
 }
 
 /* =========================================================
@@ -1699,15 +1715,18 @@ function startRound(){
 function endRound(winner){
   winner.wins++;
   updatePipsUI();
+  const winnerIsPlayerObj = (winner === player); // objective fact — `player` is always the host's fighter
   if (winner.wins >= WINS_NEEDED){
     matchState = 'matchEnd';
-    flashCenterText((winner === player ? 'YOU WIN!' : 'CPU WINS'), 'MATCH OVER', 3000);
+    flashCenterText(describeOutcome(winnerIsPlayerObj, true), 'MATCH OVER', 3000, true);
+    if (Net.isHost) netSend({ t:'ev', name:'matchOutcome', winnerIsPlayerObj, isMatchEnd:true });
     SFX.win();
     winner.state = 'victory';
     winner.victoryStart = performance.now();
-    setTimeout(showFinalOverlay, 1600);
+    setTimeout(() => showFinalOverlay(winnerIsPlayerObj), 1600);
   } else {
-    flashCenterText((winner === player ? 'YOU WIN ROUND' : 'CPU WINS ROUND'), '', 1400);
+    flashCenterText(describeOutcome(winnerIsPlayerObj, false), '', 1400, true);
+    if (Net.isHost) netSend({ t:'ev', name:'matchOutcome', winnerIsPlayerObj, isMatchEnd:false });
     roundNumber++;
     setTimeout(startRound, 1800);
   }
@@ -1730,17 +1749,24 @@ function spawnConfetti(count){
   }
 }
 
-function showFinalOverlay(){
-  const iWon = player.wins > cpu.wins;
-  document.getElementById('overlayTitle').textContent = iWon ? 'YOU WIN THE MATCH!' : 'CPU WINS THE MATCH';
-  document.getElementById('overlayScore').textContent = player.wins + ' - ' + cpu.wins;
-  document.getElementById('overlaySub').textContent = 'タップしてもう一度';
-  document.getElementById('overlayBtn').textContent = 'RESTART';
+function showFinalOverlay(winnerIsPlayerObj){
+  if (winnerIsPlayerObj === undefined) winnerIsPlayerObj = player.wins > cpu.wins; // offline fallback
+  const iWon = Net.isGuest ? !winnerIsPlayerObj : winnerIsPlayerObj;
+  const showWinTreatment = !Net.isSpectator && iWon; // spectators get the neutral/subdued look either way
+  document.getElementById('overlayTitle').textContent = describeOutcome(winnerIsPlayerObj, true);
+  const myWins = Net.isGuest ? cpu.wins : player.wins;
+  const oppWins = Net.isGuest ? player.wins : cpu.wins;
+  document.getElementById('overlayScore').textContent = Net.isSpectator
+    ? (player.wins + ' - ' + cpu.wins) : (myWins + ' - ' + oppWins);
   const ov = document.getElementById('overlay');
-  ov.classList.toggle('win', iWon);
-  ov.classList.toggle('lose', !iWon);
+  const canRestart = !Net.isOnline || Net.isHost; // only the host is authoritative enough to restart
+  document.getElementById('overlaySub').textContent = canRestart ? 'タップしてもう一度' : 'ホストの操作をお待ちください…';
+  document.getElementById('overlayBtn').style.display = canRestart ? '' : 'none';
+  document.getElementById('overlayBtn').textContent = 'RESTART';
+  ov.classList.toggle('win', showWinTreatment);
+  ov.classList.toggle('lose', !showWinTreatment);
   ov.classList.add('show');
-  if (iWon) spawnConfetti(70);
+  if (showWinTreatment) spawnConfetti(70);
 }
 
 document.getElementById('overlayBtn').addEventListener('pointerdown', (e) => {
@@ -2158,14 +2184,28 @@ function guestHandleMessage(msg){
     applyFighterSnapshot(player, msg.p, offset);
     applyFighterSnapshot(cpu, msg.c, offset);
     updateHpUI(); updatePipsUI();
+    // the host actually restarted (matchState moved off 'matchEnd') — if our own result
+    // overlay from the previous match is still up, we're not the one who dismissed it
+    // (that button is host-only for guest/spectator), so clear it here instead.
+    if (matchState !== 'matchEnd'){
+      const ov = document.getElementById('overlay');
+      if (ov.classList.contains('show')){
+        ov.classList.remove('show', 'win', 'lose');
+        document.getElementById('confettiLayer').innerHTML = '';
+      }
+    }
   } else if (msg.t === 'ev'){
-    if (msg.name === 'centerText') flashCenterText(msg.big, msg.small, msg.ms);
+    if (msg.name === 'centerText') flashCenterText(msg.big, msg.small, msg.ms, true);
     else if (msg.name === 'sfx') SFX[msg.sfx]();
     else if (msg.name === 'shake') shake(msg.mag, msg.ms);
     else if (msg.name === 'flashHit') flashHit(msg.who === 'p' ? player : cpu);
     else if (msg.name === 'chat') addDanmaku(msg.text);
     else if (msg.name === 'combo') showComboCounter(msg.n);
     else if (msg.name === 'costume') rebuildFighterMesh(msg.who === 'player' ? player : cpu, msg.key);
+    else if (msg.name === 'matchOutcome'){
+      flashCenterText(describeOutcome(msg.winnerIsPlayerObj, msg.isMatchEnd), msg.isMatchEnd ? 'MATCH OVER' : '', msg.isMatchEnd ? 3000 : 1400, true);
+      if (msg.isMatchEnd) setTimeout(() => showFinalOverlay(msg.winnerIsPlayerObj), 1600);
+    }
   } else if (msg.t === 'stageChosen'){
     STAGE_DEFS[msg.stage].build(stageGroup);
     document.getElementById('waitHostPanel').classList.add('hide');
