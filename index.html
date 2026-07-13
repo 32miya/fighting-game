@@ -80,12 +80,12 @@
   .stageBtn[data-stage="volcano"]{ background:linear-gradient(160deg,#ff5a1a55,#3a181088); border-color:#ff8a50; }
   .stageBtn[data-stage="dojo"]{ background:linear-gradient(160deg,#a9743f55,#2a201888); border-color:#d8b06a; }
 
-  #modeSelect, #onlinePanel, #waitHostPanel{
+  #modeSelect, #onlinePanel, #waitHostPanel, #difficultySelect{
     position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     background:#000d; z-index:31; flex-direction:column; gap:14px; text-align:center; padding:20px;
   }
-  #modeSelect.hide, #onlinePanel.hide, #waitHostPanel.hide{ display:none; }
-  #modeSelect h1, #onlinePanel h1, #waitHostPanel h1{ font-size:clamp(18px,4.5vw,28px); margin:0 0 6px; letter-spacing:.05em; }
+  #modeSelect.hide, #onlinePanel.hide, #waitHostPanel.hide, #difficultySelect.hide{ display:none; }
+  #modeSelect h1, #onlinePanel h1, #waitHostPanel h1, #difficultySelect h1{ font-size:clamp(18px,4.5vw,28px); margin:0 0 6px; letter-spacing:.05em; }
   .menuBtn{
     pointer-events:auto; font-size:15px; font-weight:700; padding:14px 30px; border-radius:16px;
     border:2px solid #ffd23f; background:#ffd23f18; color:#ffd23f; letter-spacing:.05em;
@@ -180,6 +180,14 @@
     <h1>対戦モードを選択</h1>
     <button class="menuBtn" id="modeCpuBtn">CPUと対戦</button>
     <button class="menuBtn" id="modeOnlineBtn">オンライン対戦 (P2P)</button>
+  </div>
+
+  <div id="difficultySelect" class="hide">
+    <h1>CPUの強さを選択</h1>
+    <button class="menuBtn" id="diffNoviceBtn">練習生</button>
+    <button class="menuBtn" id="diffMasterBtn">師範</button>
+    <button class="menuBtn" id="diffExpertBtn">達人</button>
+    <button class="menuBtn ghost" id="difficultyBackBtn">戻る</button>
   </div>
 
   <div id="onlinePanel" class="hide">
@@ -641,7 +649,7 @@ class Fighter{
     scene.add(this.mesh);
 
     this.hp = 100; this.maxHp = 100; this.wins = 0;
-    this.state = 'idle'; // idle | attack | throw | thrown | hitstun | down
+    this.state = 'idle'; // idle | attack | throw | thrown | hitstun | down | knockdown
     this.attackType = null;
     this.attackStart = 0;
     this.attackResolved = true;
@@ -649,7 +657,12 @@ class Fighter{
     this.dashBuffUntil = 0;
     this.guard = false;
     this.guardReleaseAt = Infinity;
-    this.lastAttack = { type:null, time:-9999 };
+    this.lastAttack = { type:null, stage:0, time:-9999 };
+    this.comboStage = 0;       // 1/2/3 = which hit of the current punch/kick string
+    this.comboExpireAt = 0;    // pressing the same button again before this time continues the combo
+    this.queuedAction = null;  // buffered next-hit input pressed while mid-attack
+    this.comboDecided = true;  // CPU-only: has this attack's combo-continue roll already happened
+    this.knockdownStart = 0;
     this.posTween = null;      // {fromX,fromZ,toX,toZ,start,duration}
     this.throwInfo = null;     // active throw animation data
     this.hitstunUntil = 0;
@@ -696,7 +709,7 @@ function shake(mag, ms){
 }
 
 function faceOpponent(f){
-  if (f.state === 'thrown' || f.state === 'down' || f.state === 'thrownDown') return;
+  if (f.state === 'thrown' || f.state === 'down' || f.state === 'thrownDown' || f.state === 'knockdown') return;
   const o = other(f);
   // keep target at the fighter's own height so this is a pure yaw (turn to face),
   // never a pitch — otherwise the whole body tips forward/back like a falling pole.
@@ -810,6 +823,11 @@ const SFX = {
     playNoise(ctx, { duration:0.22, filterFreq:500, filterType:'lowpass', gain:0.6 });
     playTone(ctx, { freq:90, type:'sine', duration:0.28, gain:0.6, freqEnd:35 });
   },
+  heavyHit(){ const ctx = ensureAudio(); // combo finisher impact — uppercut knockdown / sobat knockback
+    playNoise(ctx, { duration:0.06, filterFreq:2500, filterType:'highpass', gain:0.25 });
+    playNoise(ctx, { duration:0.28, filterFreq:280, filterType:'lowpass', gain:0.7 });
+    playTone(ctx, { freq:70, type:'sine', duration:0.34, gain:0.8, freqEnd:24 });
+  },
   bell(){ const ctx = ensureAudio();
     playTone(ctx, { freq:880, type:'sine', duration:0.5, gain:0.35 });
     playTone(ctx, { freq:1320, type:'sine', duration:0.4, gain:0.2, delay:0.02 });
@@ -837,20 +855,51 @@ Object.keys(SFX).forEach(name => {
 /* =========================================================
    Combat: attacks
    ========================================================= */
-const PUNCH = { startup:130, active:90, recovery:220, dmg:8, reach:1.55 };
-const KICK  = { startup:190, active:100, recovery:300, dmg:12, reach:1.85 };
+// Per-combo-stage specs. Stage 1 of each is byte-for-byte the original single punch/kick.
+const PUNCH_SPECS = [ null,
+  { startup:130, active:90,  recovery:220, dmg:8,  reach:1.55 },                    // 1: jab (unchanged)
+  { startup:110, active:80,  recovery:200, dmg:9,  reach:1.55 },                    // 2: cross (one-two)
+  { startup:150, active:100, recovery:320, dmg:14, reach:1.5,  knockdown:true },    // 3: uppercut
+];
+const KICK_SPECS = [ null,
+  { startup:190, active:100, recovery:300, dmg:12, reach:1.85 },                    // 1: body roundhouse (unchanged)
+  { startup:175, active:100, recovery:290, dmg:13, reach:1.85 },                    // 2: head kick
+  { startup:230, active:110, recovery:360, dmg:16, reach:1.9,  knockback:2 },       // 3: rolling sobat
+];
+function getAttackSpec(type, stage){
+  const table = type === 'kick' ? KICK_SPECS : PUNCH_SPECS;
+  return table[stage] || table[1];
+}
 
-function tryAttack(f, type){
-  if (f.state !== 'idle' || f.guard) return;
-  const spec = type === 'kick' ? KICK : PUNCH;
-  const now = performance.now();
+const COMBO_BUFFER_MS = 550; // window after a hit's recovery ends during which the same button continues the string
+const KNOCKBACK_STEP = 0.9;
+
+function startAttackStage(f, type, stage, now){
+  const spec = getAttackSpec(type, stage);
   f.state = 'attack';
   f.attackType = type;
+  f.comboStage = stage;
   f.attackStart = now;
   f.attackResolved = false;
+  f.queuedAction = null;
+  f.comboDecided = false;
   f.isDashAttack = now < f.dashBuffUntil;
   f.dashBuffUntil = 0;
-  f.lastAttack = { type, time:now };
+  f.lastAttack = { type, stage, time:now };
+  f.comboExpireAt = now + spec.startup + spec.active + spec.recovery + COMBO_BUFFER_MS;
+}
+
+function tryAttack(f, type){
+  if (f.guard) return;
+  const now = performance.now();
+  if (f.state === 'attack'){
+    // buffer the next hit of the same string; consumed once the current hit's animation finishes
+    if (f.attackType === type && !f.queuedAction && f.comboStage < 3) f.queuedAction = type;
+    return;
+  }
+  if (f.state !== 'idle') return;
+  const stage = (f.attackType === type && now < f.comboExpireAt && f.comboStage < 3) ? f.comboStage + 1 : 1;
+  startAttackStage(f, type, stage, now);
 }
 
 function resolveAttackHit(attacker){
@@ -859,11 +908,11 @@ function resolveAttackHit(attacker){
   const defender = other(attacker);
   if (defender.state === 'down') return;
 
-  const spec = attacker.attackType === 'kick' ? KICK : PUNCH;
+  const spec = getAttackSpec(attacker.attackType, attacker.comboStage);
   const dx = Math.abs(attacker.mesh.position.x - defender.mesh.position.x);
   const dz = Math.abs(attacker.mesh.position.z - defender.mesh.position.z);
 
-  if (dx > spec.reach || dz > 0.75 || defender.state === 'thrown' || defender.state === 'thrownDown'){
+  if (dx > spec.reach || dz > 0.75 || defender.state === 'thrown' || defender.state === 'thrownDown' || defender.state === 'knockdown'){
     flashCenterText('MISS', '', 500);
     SFX.miss();
     return; // evaded via axis-shift / backstep / range
@@ -875,6 +924,18 @@ function resolveAttackHit(attacker){
     dmg *= 0.3;
     shake(0.04, 100);
     SFX.guard();
+  } else if (spec.knockdown){
+    shake(0.14, 220);
+    SFX.heavyHit();
+    defender.state = 'knockdown';
+    defender.knockdownStart = now2();
+  } else if (spec.knockback){
+    shake(0.14, 220);
+    SFX.heavyHit();
+    const dir = Math.sign(defender.mesh.position.x - attacker.mesh.position.x) || 1;
+    tweenPos(defender, defender.mesh.position.x + dir * spec.knockback * KNOCKBACK_STEP, defender.mesh.position.z, 260);
+    defender.state = 'hitstun';
+    defender.hitstunUntil = now2() + 420;
   } else {
     defender.state = 'hitstun';
     defender.hitstunUntil = now2() + 260;
@@ -900,13 +961,22 @@ function tryThrow(f){
   const counterActive = o.state === 'attack' && !o.attackResolved && (now - o.lastAttack.time) <= 500;
 
   if (counterActive && dx <= 1.9 && dz <= 0.9){
+    const stage = o.lastAttack.stage || 1;
+    let kind, dmg;
     if (o.lastAttack.type === 'punch'){
-      const throwsUp = f.mesh.position.x < 0; // screen-left => up, screen-right => down
-      doThrow(f, o, throwsUp ? 'aikido_up' : 'aikido_down', 18);
+      if (stage === 1){
+        const throwsUp = f.mesh.position.x < 0; // screen-left => up, screen-right => down
+        kind = throwsUp ? 'aikido_up' : 'aikido_down'; dmg = 18;
+      } else if (stage === 2){ kind = 'koshi_nage'; dmg = 20; }        // vs the one-two's straight
+      else { kind = 'ura_nage'; dmg = 24; }                            // vs the uppercut
     } else {
-      doThrow(f, o, 'dragon_screw', 20);
+      if (stage === 1){ kind = 'dragon_screw'; dmg = 20; }
+      else if (stage === 2){ kind = 'duck_tackle'; dmg = 20; }         // duck under the head kick, tackle
+      else { kind = 'achilles_lock'; dmg = 26; }                       // catch the sobat, reverse achilles lock
     }
+    doThrow(f, o, kind, dmg);
     o.state = 'idle'; o.attackResolved = true; // counter negates the attack
+    o.comboStage = 0; o.queuedAction = null;
     return;
   }
 
@@ -922,15 +992,20 @@ function tryThrow(f){
   SFX.miss();
 }
 
+const THROW_DURATIONS = {
+  seoi_nage:750, aikido_up:850, aikido_down:850, dragon_screw:850,
+  koshi_nage:800, ura_nage:950, duck_tackle:900, achilles_lock:1050,
+};
+
 function doThrow(thrower, target, kind, dmg){
   const now = performance.now();
   thrower.state = 'throw'; target.state = 'thrown';
-  const data = { kind, start:now, duration: kind === 'seoi_nage' ? 750 : 850,
+  const data = { kind, start:now, duration: THROW_DURATIONS[kind] || 850,
                  throwerX:thrower.mesh.position.x, throwerZ:thrower.mesh.position.z,
                  targetX0:target.mesh.position.x, targetZ0:target.mesh.position.z,
                  dmg, applied:false };
   thrower.throwInfo = data; target.throwInfo = data;
-  shake(0.12, 200);
+  shake(kind === 'ura_nage' || kind === 'achilles_lock' ? 0.16 : 0.12, kind === 'achilles_lock' ? 260 : 200);
 }
 
 /* =========================================================
@@ -980,6 +1055,8 @@ function blendStance(f, rate){
   L.legL.knee.rotation.x = lerp(L.legL.knee.rotation.x, STANCE.backKneeX, rate);
   L.legL.hip.rotation.y = lerp(L.legL.hip.rotation.y, 0, rate);
   L.hips.rotation.y = lerp(L.hips.rotation.y, 0, rate);
+  L.waist.rotation.y = lerp(L.waist.rotation.y, 0, rate);
+  L.chest.rotation.y = lerp(L.chest.rotation.y, 0, rate);
   L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX + guardT*0.15, rate);
   L.armL.shoulder.rotation.z = lerp(L.armL.shoulder.rotation.z, STANCE.shoulderZ, rate);
   L.armL.elbow.rotation.x = lerp(L.armL.elbow.rotation.x, STANCE.elbowX, rate);
@@ -996,7 +1073,7 @@ function animatePose(f){
   const lerp = THREE.MathUtils.lerp;
 
   if (f.state === 'attack'){
-    const spec = f.attackType === 'kick' ? KICK : PUNCH;
+    const spec = getAttackSpec(f.attackType, f.comboStage);
     const total = spec.startup + spec.active + spec.recovery;
     const t = THREE.MathUtils.clamp((now - f.attackStart) / total, 0, 1);
     const upT = spec.startup/total, activeEndT = (spec.startup+spec.active)/total;
@@ -1006,31 +1083,94 @@ function animatePose(f){
     else swing = 1 - (t-activeEndT)/(1-activeEndT);
 
     if (f.attackType === 'kick'){
-      // rear leg (legL, structurally back) chambers at the hip and snaps the knee straight,
-      // with the hip and waist yawing into it so it arcs around like a roundhouse instead
-      // of just swinging straight up, letting it reach the opponent's upper body.
-      L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip, swing);
-      L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
-      L.legL.hip.rotation.y = lerp(0, KICK_POSE.hipYaw, swing);
-      L.hips.rotation.y = lerp(0, KICK_POSE.waistYaw, swing);
-      L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
-      L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
-      L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.15, swing);
-      L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
-      L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+      if (f.comboStage === 3){
+        // rolling sobat — the whole torso spins (hips+waist+chest, arms/head ride along
+        // as children of chest) while the rear leg snaps out at the top of the spin
+        L.hips.rotation.y = lerp(0, Math.PI*1.1, swing);
+        L.waist.rotation.y = lerp(0, Math.PI*1.1, swing);
+        L.chest.rotation.y = lerp(0, Math.PI*1.1, swing);
+        L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip - 0.2, swing);
+        L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.25, swing);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX - 0.2, 0.2);
+        L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX - 0.2, 0.2);
+      } else if (f.comboStage === 2){
+        // head kick — same roundhouse mechanics as stage 1 but chambers higher for the face
+        L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip - 0.3, swing);
+        L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
+        L.legL.hip.rotation.y = lerp(0, KICK_POSE.hipYaw + 0.25, swing);
+        L.hips.rotation.y = lerp(0, KICK_POSE.waistYaw + 0.15, swing);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.22, swing);
+        L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+        L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+      } else {
+        // rear leg (legL, structurally back) chambers at the hip and snaps the knee straight,
+        // with the hip and waist yawing into it so it arcs around like a roundhouse instead
+        // of just swinging straight up, letting it reach the opponent's upper body.
+        L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip, swing);
+        L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
+        L.legL.hip.rotation.y = lerp(0, KICK_POSE.hipYaw, swing);
+        L.hips.rotation.y = lerp(0, KICK_POSE.waistYaw, swing);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.15, swing);
+        L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+        L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+      }
     } else {
-      // rear arm (armR) drives the elbow straight for a cross/jab
-      L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX, PUNCH_POSE.shoulder, swing);
-      L.armR.elbow.rotation.x = lerp(STANCE.elbowX, PUNCH_POSE.elbow, swing);
-      L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX + 0.08, swing);
-      L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
-      L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
-      L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, 0.2);
-      L.legL.knee.rotation.x = lerp(L.legL.knee.rotation.x, STANCE.backKneeX, 0.2);
-      L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
-      L.armL.elbow.rotation.x = lerp(L.armL.elbow.rotation.x, STANCE.elbowX, 0.2);
+      if (f.comboStage === 3){
+        // uppercut — rear arm drives up from a low chamber instead of straight out
+        L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX + 0.3, PUNCH_POSE.shoulder - 0.5, swing);
+        L.armR.shoulder.rotation.z = lerp(STANCE.shoulderZ, -STANCE.shoulderZ - 0.35, swing);
+        L.armR.elbow.rotation.x = lerp(STANCE.elbowX + 0.6, PUNCH_POSE.elbow, swing);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX - 0.1, STANCE.chestLeanX + 0.22, swing);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, 0.2);
+        L.legL.knee.rotation.x = lerp(L.legL.knee.rotation.x, STANCE.backKneeX, 0.2);
+        L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+        L.armL.elbow.rotation.x = lerp(L.armL.elbow.rotation.x, STANCE.elbowX, 0.2);
+      } else if (f.comboStage === 2){
+        // cross — the lead arm (armL) snaps out so it reads as a distinct second hit from the jab
+        L.armL.shoulder.rotation.x = lerp(STANCE.shoulderX, PUNCH_POSE.shoulder, swing);
+        L.armL.elbow.rotation.x = lerp(STANCE.elbowX, PUNCH_POSE.elbow, swing);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX + 0.1, swing);
+        L.hips.rotation.y = lerp(0, -0.2, swing);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, 0.2);
+        L.legL.knee.rotation.x = lerp(L.legL.knee.rotation.x, STANCE.backKneeX, 0.2);
+        L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+        L.armR.elbow.rotation.x = lerp(L.armR.elbow.rotation.x, STANCE.elbowX, 0.2);
+      } else {
+        // rear arm (armR) drives the elbow straight for a cross/jab
+        L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX, PUNCH_POSE.shoulder, swing);
+        L.armR.elbow.rotation.x = lerp(STANCE.elbowX, PUNCH_POSE.elbow, swing);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX + 0.08, swing);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, 0.2);
+        L.legL.knee.rotation.x = lerp(L.legL.knee.rotation.x, STANCE.backKneeX, 0.2);
+        L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
+        L.armL.elbow.rotation.x = lerp(L.armL.elbow.rotation.x, STANCE.elbowX, 0.2);
+      }
     }
-    if (t >= 1) f.state = 'idle';
+    if (t >= 1){
+      if (f.queuedAction && f.comboStage < 3){
+        const nextType = f.queuedAction;
+        const nextStage = (f.attackType === nextType) ? f.comboStage + 1 : 1;
+        startAttackStage(f, nextType, nextStage, now);
+      } else {
+        // NOTE: comboStage is intentionally left as-is (not zeroed) here — tryAttack()
+        // reads it to decide whether the next press continues the string, using
+        // comboExpireAt (a real deadline) rather than this flag to know when it's stale.
+        f.state = 'idle';
+      }
+    }
     return;
   }
 
@@ -1057,6 +1197,24 @@ function animatePose(f){
     f.mesh.rotation.x = lerp(0, Math.PI/2*0.85, lieAmount);
     f.mesh.position.y = lerp(0, 0.16, lieAmount);
     if (elapsed >= THROWN_DOWN_MS){
+      f.mesh.rotation.set(0,0,0);
+      f.mesh.position.y = 0;
+      f.state = 'idle';
+    }
+    return;
+  }
+
+  if (f.state === 'knockdown'){
+    // a clean uppercut knocks the opponent onto their back — distinct from being thrown
+    // (falls backward, not forward-prone) and from a KO (gets back up after a beat).
+    const KNOCKDOWN_MS = 900, GET_UP_MS = 260;
+    const elapsed = now - f.knockdownStart;
+    const downT = THREE.MathUtils.clamp(elapsed / 150, 0, 1);
+    const upT = THREE.MathUtils.clamp((elapsed - (KNOCKDOWN_MS - GET_UP_MS)) / GET_UP_MS, 0, 1);
+    const lieAmount = downT * (1 - upT);
+    f.mesh.rotation.x = lerp(0, -Math.PI/2*0.8, lieAmount);
+    f.mesh.position.y = lerp(0, 0.14, lieAmount);
+    if (elapsed >= KNOCKDOWN_MS){
       f.mesh.rotation.set(0,0,0);
       f.mesh.position.y = 0;
       f.state = 'idle';
@@ -1119,12 +1277,49 @@ function animateThrow(f){
       f.mesh.position.z = lerp(data.targetZ0, toZ, t);
       f.mesh.rotation.z = lerp(0, Math.PI*1.4, t);
       f.mesh.position.y = Math.sin(Math.PI*t) * 1.3;
-    } else { // dragon_screw
+    } else if (data.kind === 'dragon_screw'){
       const dir = data.targetX0 >= data.throwerX ? 1 : -1;
       toX = data.throwerX + dir * 1.1;
       f.mesh.position.x = lerp(data.targetX0, toX, t);
       f.mesh.rotation.y = lerp(0, Math.PI*3, t);
       f.mesh.position.y = Math.sin(Math.PI*t) * 1.4;
+    } else if (data.kind === 'koshi_nage'){
+      // hip throw — countering the one-two's cross: stays on the same side and arcs
+      // over the hip instead of flipping fully behind, reading as a quicker, tighter throw
+      const dir = data.targetX0 >= data.throwerX ? 1 : -1;
+      toX = data.throwerX + dir * 1.0;
+      toZ = THREE.MathUtils.clamp(data.throwerZ + (dir > 0 ? -1 : 1) * 1.1, -ARENA_Z, ARENA_Z);
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, toZ, t);
+      f.mesh.rotation.z = lerp(0, dir * Math.PI*1.6, t);
+      f.mesh.position.y = Math.sin(Math.PI*t) * 1.0;
+    } else if (data.kind === 'ura_nage'){
+      // back suplex — countering the uppercut: the biggest arc, thrower falls backward
+      // carrying the target up and over, landing furthest behind the thrower of any throw
+      const dir = data.targetX0 >= data.throwerX ? -1 : 1;
+      toX = data.throwerX + dir * 1.8;
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.x = lerp(0, -Math.PI*2, t);
+      f.mesh.position.y = Math.sin(Math.PI*t) * 1.6;
+    } else if (data.kind === 'duck_tackle'){
+      // duck under the head kick and drive forward into a tackle — a low, ground-level
+      // takedown (no aerial arc) rather than a hip/shoulder throw
+      const dir = data.targetX0 >= data.throwerX ? 1 : -1;
+      toX = data.throwerX + dir * 1.6;
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.x = lerp(0, Math.PI*0.55, t);
+      f.mesh.position.y = Math.max(0, Math.sin(Math.PI*t) * 0.5);
+    } else { // achilles_lock — catch the rolling sobat's kicking leg and drop into a hold;
+      // minimal travel and a quick low drop, then held (longest duration of any throw)
+      const dir = data.targetX0 >= data.throwerX ? 1 : -1;
+      toX = data.throwerX + dir * 0.9;
+      const dropT = Math.min(t*1.4, 1);
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.z = lerp(0, dir * Math.PI*0.5, dropT);
+      f.mesh.position.y = Math.sin(Math.PI*dropT) * 0.35;
     }
     if (t >= 1){
       f.mesh.position.y = 0;
@@ -1202,6 +1397,8 @@ const WINS_NEEDED = 2;
 function resetFighter(f, x){
   f.hp = 100; f.state = 'idle'; f.guard = false; f.posTween = null; f.throwInfo = null;
   f.attackResolved = true; f.downType = null; f.downStart = null;
+  f.comboStage = 0; f.comboExpireAt = 0; f.queuedAction = null; f.comboDecided = true;
+  f.knockdownStart = 0; f.lastAttack = { type:null, stage:0, time:-9999 };
   f.mesh.position.set(x, 0, 0);
   resetPose(f);
   updateFlash(f);
@@ -1353,12 +1550,33 @@ function updateWalk(f, src, dt){
   clampSeparation(f);
 }
 
+// Three CPU tiers — 練習生 (novice) never chains and rarely reacts, 師範 (master) chains up to
+// the 2nd hit and reacts respectably, 達人 (expert) uses full 3-hit combos and reacts fast enough
+// to catch the stage-matched counter-throw window most of the time.
+const CPU_DIFFICULTY = {
+  novice: { reactionMs:[500, 900], counterChance:0.15, guardChance:0.25, comboChance:0.15, maxCombo:1, dashChance:0.2,  kickBias:0.4 },
+  master: { reactionMs:[280, 520], counterChance:0.35, guardChance:0.45, comboChance:0.55, maxCombo:2, dashChance:0.35, kickBias:0.5 },
+  expert: { reactionMs:[140, 300], counterChance:0.55, guardChance:0.60, comboChance:0.85, maxCombo:3, dashChance:0.5,  kickBias:0.5 },
+};
+let cpuDifficulty = 'novice';
+
 function updateCpuAI(){
-  if (matchState !== 'fighting' || cpu.state !== 'idle') return;
+  if (matchState !== 'fighting') return;
+  const cfg = CPU_DIFFICULTY[cpuDifficulty];
   const now = performance.now();
   if (cpu.guard && now > cpu.guardReleaseAt) cpu.guard = false;
+
+  // continue an in-progress combo independent of the decision timer, so the chain doesn't
+  // stall waiting for the next tick — rolled exactly once per hit via comboDecided.
+  if (cpu.state === 'attack' && !cpu.comboDecided){
+    cpu.comboDecided = true;
+    if (cpu.comboStage < cfg.maxCombo && Math.random() < cfg.comboChance) cpu.queuedAction = cpu.attackType;
+  }
+
+  if (cpu.state !== 'idle') return;
   if (now < cpu.nextDecision) return;
-  cpu.nextDecision = now + 320 + Math.random()*430;
+  const [rMin, rMax] = cfg.reactionMs;
+  cpu.nextDecision = now + rMin + Math.random()*(rMax-rMin);
 
   const dx = player.mesh.position.x - cpu.mesh.position.x;
   const dist = Math.abs(dx);
@@ -1366,12 +1584,13 @@ function updateCpuAI(){
 
   if (player.state === 'attack' && !player.attackResolved && dist < 2.2){
     const r = Math.random();
-    if (r < 0.3){ axisShift(cpu, Math.random() < 0.5 ? -1 : 1); return; }
-    if (r < 0.55){ cpu.guard = true; cpu.guardReleaseAt = now + 400; return; }
-    if (r < 0.68){ tryThrow(cpu); return; } // attempt counter-throw
+    if (r < cfg.counterChance){ tryThrow(cpu); return; } // attempt the stage-matched counter-throw
+    if (r < cfg.counterChance + cfg.guardChance){ cpu.guard = true; cpu.guardReleaseAt = now + 400; return; }
+    axisShift(cpu, Math.random() < 0.5 ? -1 : 1);
+    return;
   }
 
-  if (dist > 2.6){ dashIn(cpu); return; }
+  if (dist > 2.6){ if (Math.random() < cfg.dashChance || dist > 3.4) dashIn(cpu); return; }
   if (dist > 1.15 && dz < 0.5){
     const dir = Math.sign(dx) || 1;
     cpu.mesh.position.x += dir * 0.9 * 0.35;
@@ -1380,7 +1599,7 @@ function updateCpuAI(){
   }
 
   const r = Math.random();
-  if (r < 0.32) tryAttack(cpu, Math.random() < 0.55 ? 'punch' : 'kick');
+  if (r < 0.32) tryAttack(cpu, Math.random() < cfg.kickBias ? 'kick' : 'punch');
   else if (r < 0.46) tryThrow(cpu);
   else if (r < 0.6) backstep(cpu);
   else if (r < 0.72) axisShift(cpu, Math.random() < 0.5 ? -1 : 1);
@@ -1540,12 +1759,13 @@ function netHandleDisconnect(){
 
 function serializeFighter(f){
   return {
-    hp:f.hp, wins:f.wins, state:f.state, attackType:f.attackType,
+    hp:f.hp, wins:f.wins, state:f.state, attackType:f.attackType, comboStage:f.comboStage,
     attackStart:f.attackStart, attackResolved:f.attackResolved,
     isDashAttack:f.isDashAttack, guard:f.guard,
     hitstunUntil:f.hitstunUntil, downType:f.downType,
     downStart: f.downStart != null ? f.downStart : null,
     thrownDownStart: f.thrownDownStart != null ? f.thrownDownStart : null,
+    knockdownStart: f.knockdownStart != null ? f.knockdownStart : null,
     throwInfo: f.throwInfo ? { ...f.throwInfo } : null,
     flashUntil:f.flashUntil,
     x:f.mesh.position.x, z:f.mesh.position.z,
@@ -1553,6 +1773,7 @@ function serializeFighter(f){
 }
 function applyFighterSnapshot(f, snap, offset){
   f.hp = snap.hp; f.wins = snap.wins; f.state = snap.state; f.attackType = snap.attackType;
+  f.comboStage = snap.comboStage;
   f.attackStart = snap.attackStart + offset;
   f.attackResolved = snap.attackResolved;
   f.isDashAttack = snap.isDashAttack;
@@ -1561,6 +1782,7 @@ function applyFighterSnapshot(f, snap, offset){
   f.downType = snap.downType;
   f.downStart = snap.downStart != null ? snap.downStart + offset : null;
   f.thrownDownStart = snap.thrownDownStart != null ? snap.thrownDownStart + offset : null;
+  f.knockdownStart = snap.knockdownStart != null ? snap.knockdownStart + offset : null;
   f.throwInfo = snap.throwInfo ? { ...snap.throwInfo, start: snap.throwInfo.start + offset } : null;
   f.flashUntil = snap.flashUntil + offset;
   f.netTargetX = snap.x; f.netTargetZ = snap.z;
@@ -1673,7 +1895,7 @@ function tick(){
     }
     [player, cpu].forEach(f => {
       if (f.state === 'attack' && !f.attackResolved){
-        const spec = f.attackType === 'kick' ? KICK : PUNCH;
+        const spec = getAttackSpec(f.attackType, f.comboStage);
         if (performance.now() - f.attackStart >= spec.startup) resolveAttackHit(f);
       }
       applyTween(f);
@@ -1710,7 +1932,20 @@ document.querySelectorAll('.stageBtn').forEach(btn => {
 document.getElementById('modeCpuBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   document.getElementById('modeSelect').classList.add('hide');
+  document.getElementById('difficultySelect').classList.remove('hide');
+});
+function pickCpuDifficulty(level){
+  cpuDifficulty = level;
+  document.getElementById('difficultySelect').classList.add('hide');
   document.getElementById('stageSelect').classList.remove('hide');
+}
+document.getElementById('diffNoviceBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); pickCpuDifficulty('novice'); });
+document.getElementById('diffMasterBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); pickCpuDifficulty('master'); });
+document.getElementById('diffExpertBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); pickCpuDifficulty('expert'); });
+document.getElementById('difficultyBackBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  document.getElementById('difficultySelect').classList.add('hide');
+  document.getElementById('modeSelect').classList.remove('hide');
 });
 document.getElementById('modeOnlineBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
