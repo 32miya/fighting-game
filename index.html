@@ -120,6 +120,32 @@
   }
   #errBanner.show{ display:block; }
 
+  /* ---------- Danmaku (niconico-style scrolling chat) ---------- */
+  #danmaku{
+    position:absolute; inset:0; overflow:hidden; pointer-events:none; z-index:15;
+  }
+  .danmakuItem{
+    position:absolute; right:-10%; white-space:nowrap; font-size:clamp(14px,3.6vw,20px);
+    font-weight:700; color:#fff; text-shadow:0 1px 3px #000, 0 0 8px #000;
+    animation-name:danmakuScroll; animation-timing-function:linear; animation-fill-mode:forwards;
+  }
+  @keyframes danmakuScroll{ from{ transform:translateX(0); } to{ transform:translateX(-130vw); } }
+
+  #spectatorChat{
+    position:absolute; left:0; right:0; bottom:0;
+    padding:0 calc(14px + env(safe-area-inset-right,0)) calc(10px + env(safe-area-inset-bottom,10px)) calc(14px + env(safe-area-inset-left,0));
+    display:flex; gap:8px; pointer-events:auto;
+  }
+  #spectatorChat.hide{ display:none; }
+  #chatInput{
+    flex:1; min-width:0; font-size:14px; padding:10px 12px; border-radius:12px;
+    border:1.5px solid #ffffff66; background:rgba(8,10,16,0.6); color:#fff;
+  }
+  #chatSendBtn{
+    flex-shrink:0; font-size:14px; font-weight:700; padding:10px 18px; border-radius:12px;
+    border:1.5px solid #ffd23f; background:#ffd23f18; color:#ffd23f;
+  }
+
   /* ---------- Controls ---------- */
   #controls{
     position:absolute; left:0; right:0; bottom:0;
@@ -152,6 +178,7 @@
 <body>
 <div id="app">
   <canvas id="scene"></canvas>
+  <div id="danmaku"></div>
 
   <div id="hud">
     <div class="hpRow">
@@ -237,6 +264,11 @@
       <div class="ctlBtn" id="btnA">G</div>
       <div class="ctlBtn" id="btnD">P</div>
     </div>
+  </div>
+
+  <div id="spectatorChat" class="hide">
+    <input id="chatInput" placeholder="応援コメントを送る" maxlength="30" autocomplete="off" />
+    <button id="chatSendBtn">送信</button>
   </div>
 </div>
 
@@ -1375,6 +1407,34 @@ function flashCenterText(big, small, ms){
 }
 
 /* =========================================================
+   Danmaku — niconico-style scrolling chat, driven by spectator
+   comments relayed through the host. Rendered identically for
+   everyone (host, player2, all spectators) via the 'chat' ev.
+   ========================================================= */
+const danmakuEl = document.getElementById('danmaku');
+const DANMAKU_LANES = 8;
+let danmakuLaneIdx = 0;
+function addDanmaku(text){
+  const el = document.createElement('div');
+  el.className = 'danmakuItem';
+  el.textContent = text; // textContent only — never innerHTML with remote peer text
+  const lane = danmakuLaneIdx % DANMAKU_LANES;
+  danmakuLaneIdx++;
+  el.style.top = (6 + lane * (88 / DANMAKU_LANES)) + '%';
+  const duration = 6 + Math.random() * 2.5;
+  el.style.animationDuration = duration + 's';
+  danmakuEl.appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
+// Untrusted text from the network (anyone with the 6-digit room code can join as a
+// spectator) — strip newlines/control chars and hard-cap length before it's ever displayed.
+function sanitizeChatText(text){
+  if (typeof text !== 'string') return '';
+  return text.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 30);
+}
+
+/* =========================================================
    HUD
    ========================================================= */
 const hpP = document.getElementById('hpP'), hpC = document.getElementById('hpC');
@@ -1743,6 +1803,7 @@ function netDisbandRoom(reason){
   document.getElementById('hostIdBox').classList.add('hide');
   document.getElementById('hostIdText').textContent = '-----';
   document.getElementById('controls').style.display = '';
+  document.getElementById('spectatorChat').classList.add('hide');
   document.getElementById('modeSelect').classList.remove('hide');
   if (reason === 'timeout') flashCenterText('ルームの有効期限が切れました', '', 2500);
 }
@@ -1801,7 +1862,22 @@ function netBroadcastState(){
   });
 }
 
+const CHAT_COOLDOWN_MS = 1200;
+const chatCooldownByConn = new Map();
+
 function hostHandleMessage(msg, conn){
+  if (msg.t === 'chat'){
+    // allowed from the designated player2 connection or any accepted spectator connection
+    if (conn !== Net.guestConn && !Net.spectatorConns.includes(conn)) return;
+    const now = performance.now();
+    if (now - (chatCooldownByConn.get(conn) ?? -Infinity) < CHAT_COOLDOWN_MS) return; // server-side backstop
+    chatCooldownByConn.set(conn, now);
+    const text = sanitizeChatText(msg.text);
+    if (!text) return;
+    addDanmaku(text);
+    netSend({ t:'ev', name:'chat', text });
+    return;
+  }
   if (msg.t !== 'input') return;
   if (conn !== Net.guestConn) return; // spectators can't act — only the designated player2 can
   switch(msg.action){
@@ -1828,6 +1904,7 @@ function guestHandleMessage(msg){
     else if (msg.name === 'sfx') SFX[msg.sfx]();
     else if (msg.name === 'shake') shake(msg.mag, msg.ms);
     else if (msg.name === 'flashHit') flashHit(msg.who === 'p' ? player : cpu);
+    else if (msg.name === 'chat') addDanmaku(msg.text);
   } else if (msg.t === 'stageChosen'){
     STAGE_DEFS[msg.stage].build(stageGroup);
     document.getElementById('waitHostPanel').classList.add('hide');
@@ -1836,7 +1913,10 @@ function guestHandleMessage(msg){
     Net.isSpectator = msg.role === 'spectator';
     relabelHudForOnline();
     document.getElementById('joinStatus').textContent = Net.isSpectator ? '観戦者として接続しました！' : '対戦相手として接続しました！';
-    if (Net.isSpectator) document.getElementById('controls').style.display = 'none';
+    if (Net.isSpectator){
+      document.getElementById('controls').style.display = 'none';
+      document.getElementById('spectatorChat').classList.remove('hide');
+    }
     document.getElementById('onlinePanel').classList.add('hide');
     document.getElementById('waitHostPanel').classList.remove('hide');
   } else if (msg.t === 'full'){
@@ -1855,6 +1935,7 @@ function guestHandleMessage(msg){
       document.getElementById('onlinePanel').classList.add('hide');
       document.getElementById('stageSelect').classList.add('hide');
       document.getElementById('controls').style.display = '';
+      document.getElementById('spectatorChat').classList.add('hide');
       document.getElementById('modeSelect').classList.remove('hide');
     }, 1500);
   }
@@ -1982,6 +2063,27 @@ document.getElementById('copyIdBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   const id = document.getElementById('hostIdText').textContent;
   navigator.clipboard?.writeText(id).catch(() => {});
+});
+
+let lastChatSentAt = -Infinity; // NOT 0 — performance.now() is also near 0 right after page load, which would falsely block the very first send
+function sendSpectatorChat(){
+  if (!Net.isSpectator) return;
+  const now = performance.now();
+  if (now - lastChatSentAt < CHAT_COOLDOWN_MS) return;
+  const input = document.getElementById('chatInput');
+  const text = sanitizeChatText(input.value);
+  if (!text) return;
+  lastChatSentAt = now;
+  netSend({ t:'chat', text });
+  input.value = '';
+}
+document.getElementById('chatSendBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  ensureAudio();
+  sendSpectatorChat();
+});
+document.getElementById('chatInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter'){ e.preventDefault(); sendSpectatorChat(); }
 });
 </script>
 </body>
