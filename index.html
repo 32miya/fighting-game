@@ -135,12 +135,26 @@
   .stageBtn[data-stage="volcano"]{ background:linear-gradient(160deg,#ff5a1a55,#3a181088); border-color:#ff8a50; }
   .stageBtn[data-stage="dojo"]{ background:linear-gradient(160deg,#a9743f55,#2a201888); border-color:#d8b06a; }
 
-  #modeSelect, #onlinePanel, #waitHostPanel, #difficultySelect{
+  #modeSelect, #onlinePanel, #waitHostPanel, #difficultySelect, #characterSelect{
     position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     background:#000d; z-index:31; flex-direction:column; gap:14px; text-align:center; padding:20px;
   }
-  #modeSelect.hide, #onlinePanel.hide, #waitHostPanel.hide, #difficultySelect.hide{ display:none; }
-  #modeSelect h1, #onlinePanel h1, #waitHostPanel h1, #difficultySelect h1{ font-size:clamp(18px,4.5vw,28px); margin:0 0 6px; letter-spacing:.05em; }
+  #modeSelect.hide, #onlinePanel.hide, #waitHostPanel.hide, #difficultySelect.hide, #characterSelect.hide{ display:none; }
+  #modeSelect h1, #onlinePanel h1, #waitHostPanel h1, #difficultySelect h1, #characterSelect h1{ font-size:clamp(18px,4.5vw,28px); margin:0 0 6px; letter-spacing:.05em; }
+  #characterGrid{
+    display:grid; grid-template-columns:repeat(3,1fr); gap:10px;
+    width:100%; max-width:520px; pointer-events:auto;
+  }
+  .characterBtn{
+    padding:14px 6px; border-radius:14px; font-size:13px; font-weight:700; line-height:1.4;
+    border:2px solid #ffffff44; color:#fff; letter-spacing:.02em;
+  }
+  .characterBtn:active{ transform:scale(0.96); }
+  .characterBtn[data-costume="gi"]{ background:linear-gradient(160deg,#f0ebe055,#c9a97d55); border-color:#e0c98a; }
+  .characterBtn[data-costume="wrestler"]{ background:linear-gradient(160deg,#ffd23f55,#24201a99); border-color:#ffd23f; }
+  .characterBtn[data-costume="soldier"]{ background:linear-gradient(160deg,#5c6b3f55,#2a3a2099); border-color:#8ee07a; }
+  .characterBtn[data-costume="mma"]{ background:linear-gradient(160deg,#e8b48c55,#1a1a1a99); border-color:#ff8a4d; }
+  .characterBtn[data-costume="hero"]{ background:linear-gradient(160deg,#ffd23f55,#ff5e3a55); border-color:#ff5e3a; }
   .menuBtn{
     pointer-events:auto; font-size:15px; font-weight:700; padding:14px 30px; border-radius:16px;
     border:2px solid #ffd23f; background:#ffd23f18; color:#ffd23f; letter-spacing:.05em;
@@ -266,6 +280,18 @@
     <h1>対戦モードを選択</h1>
     <button class="menuBtn" id="modeCpuBtn">CPUと対戦</button>
     <button class="menuBtn" id="modeOnlineBtn">オンライン対戦 (P2P)</button>
+  </div>
+
+  <div id="characterSelect" class="hide">
+    <h1>キャラクターを選択</h1>
+    <div id="characterGrid">
+      <button class="characterBtn" data-costume="gi">道着<br>ファイター</button>
+      <button class="characterBtn" data-costume="wrestler">プロレスラー</button>
+      <button class="characterBtn" data-costume="soldier">ソルジャー</button>
+      <button class="characterBtn" data-costume="mma">総合格闘家</button>
+      <button class="characterBtn" data-costume="hero">ヒーロー</button>
+    </div>
+    <button class="menuBtn ghost" id="characterBackBtn">戻る</button>
   </div>
 
   <div id="difficultySelect" class="hide">
@@ -602,19 +628,58 @@ const STAGE_DEFS = {
    Fighter model — 3-piece torso (hips / waist / chest) +
    articulated arms (shoulder→elbow) and legs (hip→knee)
    ========================================================= */
-function buildFighterMesh(color){
+/* Costume presets — purely cosmetic (materials + optional bolted-on decoration).
+   None of these touch a single joint offset or limb length, so the combat/pose
+   code (which was hand-tuned against the rig's exact geometry) is untouched.
+   waist/obi always uses the fighter's own accentColor (P1/P2 color-coding),
+   independent of costume, so the two sides stay visually distinguishable
+   no matter which costume either of them is wearing. */
+const COSTUMES = {
+  gi: {
+    label:'道着ファイター',
+    chest:0xf0ebe0, hips:0xf0ebe0, limb:0xf0ebe0,
+    skin:0xe8b48c, glove:0xe8b48c, boot:0xe8b48c, extra:null,
+  },
+  wrestler: {
+    label:'プロレスラー',
+    chest:0x241f1a, hips:0x241f1a, limb:0xe8b48c,
+    skin:0xe8b48c, glove:0xe8b48c, boot:0xffffff, extra:null,
+  },
+  soldier: {
+    label:'ソルジャー',
+    chest:0x5c6b3f, hips:0x4a5636, limb:0x5c6b3f,
+    skin:0xe8b48c, glove:0x3a2f22, boot:0x2a2a2a, extra:'helmet', extraColor:0x4a5636,
+  },
+  mma: {
+    label:'総合格闘家',
+    chest:0xe8b48c, hips:0x1a1a1a, limb:0xe8b48c,
+    skin:0xe8b48c, glove:0x1a1a1a, boot:0xe8b48c, extra:null,
+  },
+  hero: {
+    label:'ヒーロー',
+    chest:0xffd23f, hips:0xffd23f, limb:0xffd23f,
+    skin:0xe8b48c, glove:0xffffff, boot:0xffffff, extra:'cape', extraColor:0xff5e3a,
+  },
+};
+
+function buildFighterMesh(costumeKey, color){
+  const costume = COSTUMES[costumeKey] || COSTUMES.gi;
   const root = new THREE.Group();
   const base = new THREE.Color(color);
   const beltMat = new THREE.MeshStandardMaterial({ color: base, roughness:0.55 }); // obi — keeps the player/CPU color coding
-  const giMat = new THREE.MeshStandardMaterial({ color:0xf0ebe0, roughness:0.85 }); // karate gi fabric
-  const skinMat = new THREE.MeshStandardMaterial({ color:0xe8b48c, roughness:0.7 });
+  const chestMat = new THREE.MeshStandardMaterial({ color: costume.chest, roughness:0.85 });
+  const hipsMat = new THREE.MeshStandardMaterial({ color: costume.hips, roughness:0.85 });
+  const limbMat = new THREE.MeshStandardMaterial({ color: costume.limb, roughness:0.85 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: costume.skin, roughness:0.7 });
+  const gloveMat = new THREE.MeshStandardMaterial({ color: costume.glove, roughness:0.7 });
+  const bootMat = new THREE.MeshStandardMaterial({ color: costume.boot, roughness:0.6 });
   const hitMeshes = [];
 
   // ---- 腰下 (hips / pelvis) ----
   const hips = new THREE.Group();
   hips.position.set(0, 0.92, 0);
   root.add(hips);
-  const hipsMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.24, 0.30), giMat);
+  const hipsMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.24, 0.30), hipsMat);
   hipsMesh.castShadow = true;
   hips.add(hipsMesh);
   hitMeshes.push(hipsMesh);
@@ -632,7 +697,7 @@ function buildFighterMesh(color){
   const chest = new THREE.Group();
   chest.position.set(0, 1.28, 0);
   root.add(chest);
-  const chestMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.27, 0.26, 4, 8), giMat);
+  const chestMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.27, 0.26, 4, 8), chestMat);
   chestMesh.position.y = 0.23;
   chestMesh.castShadow = true;
   chest.add(chestMesh);
@@ -643,6 +708,20 @@ function buildFighterMesh(color){
   head.castShadow = true;
   chest.add(head);
 
+  if (costume.extra === 'helmet'){
+    const helmetMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.5 });
+    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.25, 14, 10, 0, Math.PI*2, 0, Math.PI*0.6), helmetMat);
+    helmet.position.set(0, 0.66, 0);
+    helmet.castShadow = true;
+    chest.add(helmet);
+  } else if (costume.extra === 'cape'){
+    const capeMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.8, side: THREE.DoubleSide });
+    const cape = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.5, 0.025), capeMat);
+    cape.position.set(0, -0.05, -0.17); // -Z = behind (away from the opponent), hangs from the shoulders
+    cape.castShadow = true;
+    chest.add(cape);
+  }
+
   // ---- Arms: 肩(shoulder) → 肘(elbow) ----
   function buildArm(side){
     const shoulder = new THREE.Group();
@@ -650,7 +729,7 @@ function buildFighterMesh(color){
     chest.add(shoulder);
 
     const upperLen = 0.24, upperR = 0.078;
-    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(upperR, upperLen, 4, 8), giMat);
+    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(upperR, upperLen, 4, 8), limbMat);
     upperArm.position.y = -(upperLen/2 + upperR);
     upperArm.castShadow = true;
     shoulder.add(upperArm);
@@ -661,12 +740,12 @@ function buildFighterMesh(color){
     shoulder.add(elbow);
 
     const foreLen = 0.24, foreR = 0.066;
-    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(foreR, foreLen, 4, 8), giMat);
+    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(foreR, foreLen, 4, 8), limbMat);
     forearm.position.y = -(foreLen/2 + foreR);
     forearm.castShadow = true;
     elbow.add(forearm);
 
-    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.088, 12, 12), skinMat);
+    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.088, 12, 12), gloveMat);
     fist.position.y = -(foreLen + foreR*2);
     fist.castShadow = true;
     elbow.add(fist);
@@ -683,7 +762,7 @@ function buildFighterMesh(color){
     hips.add(hip);
 
     const thighLen = 0.30, thighR = 0.105;
-    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(thighR, thighLen, 4, 8), giMat);
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(thighR, thighLen, 4, 8), limbMat);
     thigh.position.y = -(thighLen/2 + thighR);
     thigh.castShadow = true;
     hip.add(thigh);
@@ -694,12 +773,12 @@ function buildFighterMesh(color){
     hip.add(knee);
 
     const shinLen = 0.30, shinR = 0.088;
-    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(shinR, shinLen, 4, 8), giMat);
+    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(shinR, shinLen, 4, 8), limbMat);
     shin.position.y = -(shinLen/2 + shinR);
     shin.castShadow = true;
     knee.add(shin);
 
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.24), skinMat);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.24), bootMat);
     foot.position.set(0, -(shinLen + shinR*2), 0.05);
     foot.castShadow = true;
     knee.add(foot);
@@ -732,10 +811,11 @@ const STANCE = {
 const ARENA_X = 4.3, ARENA_Z = 1.6, MIN_GAP = 0.95;
 
 class Fighter{
-  constructor(name, color, x, isCPU){
+  constructor(name, color, x, isCPU, costume){
     this.name = name;
     this.isCPU = isCPU;
-    this.mesh = buildFighterMesh(color);
+    this.costume = costume || 'gi';
+    this.mesh = buildFighterMesh(this.costume, color);
     this.mesh.position.set(x, 0, 0);
     scene.add(this.mesh);
 
@@ -770,6 +850,19 @@ class Fighter{
 const player = new Fighter('PLAYER', 0x3fa9ff, -1.6, false);
 const cpu    = new Fighter('CPU',    0xff4d4d,  1.6, true);
 function other(f){ return f === player ? cpu : player; }
+
+// Swaps a fighter's mesh for a different costume, preserving its current position.
+// Meshes are cheap (a couple dozen primitives), so a full rebuild — rather than trying
+// to re-material an existing mesh in place — keeps buildFighterMesh() the single source
+// of truth and avoids any risk of missing a part when a new costume adds decoration.
+function rebuildFighterMesh(f, costumeKey){
+  const x = f.mesh.position.x, z = f.mesh.position.z;
+  scene.remove(f.mesh);
+  f.costume = costumeKey;
+  f.mesh = buildFighterMesh(costumeKey, f.baseColor);
+  f.mesh.position.set(x, 0, z);
+  scene.add(f.mesh);
+}
 
 /* =========================================================
    Camera framing — keeps both fighters in view, look-at midpoint
@@ -2138,13 +2231,39 @@ document.querySelectorAll('.stageBtn').forEach(btn => {
   });
 });
 
+let pendingMode = null; // 'cpu' | 'online' — which screen characterSelect should hand off to next
 document.getElementById('modeCpuBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
+  pendingMode = 'cpu';
   document.getElementById('modeSelect').classList.add('hide');
-  document.getElementById('difficultySelect').classList.remove('hide');
+  document.getElementById('characterSelect').classList.remove('hide');
+});
+document.getElementById('modeOnlineBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  pendingMode = 'online';
+  document.getElementById('modeSelect').classList.add('hide');
+  document.getElementById('characterSelect').classList.remove('hide');
+});
+document.querySelectorAll('.characterBtn').forEach(btn => {
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    SFX.tap();
+    rebuildFighterMesh(player, btn.dataset.costume);
+    document.getElementById('characterSelect').classList.add('hide');
+    if (pendingMode === 'online') document.getElementById('onlinePanel').classList.remove('hide');
+    else document.getElementById('difficultySelect').classList.remove('hide');
+  });
+});
+document.getElementById('characterBackBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  document.getElementById('characterSelect').classList.add('hide');
+  document.getElementById('modeSelect').classList.remove('hide');
 });
 function pickCpuDifficulty(level){
   cpuDifficulty = level;
+  // give the CPU a random look of its own, distinct from whatever the player just picked
+  const otherCostumes = Object.keys(COSTUMES).filter(k => k !== player.costume);
+  rebuildFighterMesh(cpu, otherCostumes[Math.floor(Math.random() * otherCostumes.length)]);
   document.getElementById('difficultySelect').classList.add('hide');
   document.getElementById('stageSelect').classList.remove('hide');
 }
@@ -2154,19 +2273,14 @@ document.getElementById('diffExpertBtn').addEventListener('pointerdown', (e) => 
 document.getElementById('difficultyBackBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   document.getElementById('difficultySelect').classList.add('hide');
-  document.getElementById('modeSelect').classList.remove('hide');
-});
-document.getElementById('modeOnlineBtn').addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  document.getElementById('modeSelect').classList.add('hide');
-  document.getElementById('onlinePanel').classList.remove('hide');
+  document.getElementById('characterSelect').classList.remove('hide');
 });
 document.getElementById('onlineBackBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (Net.peer) netDisbandRoom('cancelled');
   else {
     document.getElementById('onlinePanel').classList.add('hide');
-    document.getElementById('modeSelect').classList.remove('hide');
+    document.getElementById('characterSelect').classList.remove('hide');
   }
 });
 document.getElementById('disbandBtn').addEventListener('pointerdown', (e) => {
