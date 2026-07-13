@@ -1220,33 +1220,16 @@ const SPECIAL_SPECS = {
   soldier: { startup:520, active:140, recovery:300, dmg:34, reach:1.9, knockdown:true },
   mma:     { startup:420, active:130, recovery:280, dmg:36, reach:2.0, knockdown:true },
   hero:    { startup:700, active:130, recovery:280, dmg:45, reach:1.6, knockdown:true },
-  wrestler:{ dmg:40 }, // grab-based — range/whiff handled inline in trySpecial, like tryThrow
+  // grab-type — same windup/resolve pattern as the strikes (needed so it can be counter-timed
+  // the same way), but at resolution it either executes a guaranteed throw or whiffs, instead
+  // of dealing damage directly like the strikes do
+  wrestler:{ startup:450, active:1, recovery:280, dmg:40, reach:1.5, isGrab:true },
 };
 
 function trySpecial(f){
   if (f.guard || f.state !== 'idle') return;
   if (f.specialGauge < SPECIAL_GAUGE_MAX) return;
-  const o = other(f);
   const now = performance.now();
-
-  if (f.costume === 'wrestler'){
-    const dx = Math.abs(f.mesh.position.x - o.mesh.position.x);
-    const dz = Math.abs(f.mesh.position.z - o.mesh.position.z);
-    const canGrab = dx <= 1.5 && dz <= 0.85 &&
-      o.state !== 'down' && o.state !== 'thrown' && o.state !== 'thrownDown' && o.state !== 'knockdown';
-    f.specialGauge = 0;
-    updateGaugeUI();
-    if (canGrab){
-      doThrow(f, o, 'powerbomb_special', SPECIAL_SPECS.wrestler.dmg);
-    } else {
-      f.state = 'throwWhiff';
-      f.attackStart = now;
-      flashCenterText('MISS', '', 400);
-      SFX.miss();
-    }
-    return;
-  }
-
   f.state = 'special';
   f.attackStart = now;
   f.specialStart = now;
@@ -1264,6 +1247,21 @@ function resolveSpecialHit(attacker){
   const spec = SPECIAL_SPECS[attacker.costume];
   const dx = Math.abs(attacker.mesh.position.x - defender.mesh.position.x);
   const dz = Math.abs(attacker.mesh.position.z - defender.mesh.position.z);
+
+  if (spec.isGrab){
+    // wrestler's powerbomb — guaranteed (ignores guard, like every other throw in this game),
+    // but only if still in range once the windup finishes; whiffing just eases back to idle
+    // through the same recovery envelope the strikes use, no separate pose needed for it.
+    const canGrab = dx <= spec.reach && dz <= 0.85 &&
+      defender.state !== 'thrown' && defender.state !== 'thrownDown' && defender.state !== 'knockdown';
+    if (!canGrab){
+      flashCenterText('MISS', '', 500);
+      SFX.miss();
+      return;
+    }
+    doThrow(attacker, defender, 'powerbomb_special', spec.dmg);
+    return;
+  }
 
   if (dx > spec.reach || dz > 0.75 || defender.state === 'thrown' || defender.state === 'thrownDown' || defender.state === 'knockdown'){
     flashCenterText('MISS', '', 500);
@@ -1295,12 +1293,35 @@ function resolveSpecialHit(attacker){
 /* =========================================================
    Combat: throws / counters
    ========================================================= */
+// Countering an opponent's charged special punishes it harder than any normal-attack counter —
+// it cost them their whole gauge, so getting reversed should sting more than a regular whiff.
+const SPECIAL_COUNTERS = {
+  gi:       { kind:'counter_gi',       dmg:30 },
+  soldier:  { kind:'counter_soldier',  dmg:30 },
+  mma:      { kind:'counter_mma',      dmg:32 },
+  hero:     { kind:'counter_hero',     dmg:38 },
+  wrestler: { kind:'counter_wrestler', dmg:34 },
+};
+
 function tryThrow(f){
   if (f.state !== 'idle') return;
   const o = other(f);
   const now = performance.now();
   const dx = Math.abs(f.mesh.position.x - o.mesh.position.x);
   const dz = Math.abs(f.mesh.position.z - o.mesh.position.z);
+
+  // Every special move (all 5 now share the 'special' state + specialStart timing) can be
+  // caught mid-windup — 900ms comfortably covers the longest startup (hero's 700ms) while
+  // still relying on !o.attackResolved as the real gate, same as the normal-attack counter below.
+  const specialCounterActive = o.state === 'special' && !o.attackResolved && (now - o.specialStart) <= 900;
+  if (specialCounterActive && dx <= 1.9 && dz <= 0.9){
+    const c = SPECIAL_COUNTERS[o.costume];
+    doThrow(f, o, c.kind, c.dmg); // sets o.state='thrown' — must NOT be overwritten below
+    o.attackResolved = true; // the reversed special is fully negated, no separate resolution fires
+    o.specialGauge = 0; // …and the gauge it cost them is gone for good, no partial refund
+    updateGaugeUI();
+    return;
+  }
 
   const counterActive = o.state === 'attack' && !o.attackResolved && (now - o.lastAttack.time) <= 500;
 
@@ -1318,8 +1339,8 @@ function tryThrow(f){
       else if (stage === 2){ kind = 'duck_tackle'; dmg = 20; }         // duck under the head kick, tackle
       else { kind = 'achilles_lock'; dmg = 26; }                       // catch the sobat, reverse achilles lock
     }
-    doThrow(f, o, kind, dmg);
-    o.state = 'idle'; o.attackResolved = true; // counter negates the attack
+    doThrow(f, o, kind, dmg); // sets o.state='thrown' — must NOT be overwritten below
+    o.attackResolved = true; // counter negates the attack, no separate resolution fires
     o.comboStage = 0; o.queuedAction = null;
     return;
   }
@@ -1340,7 +1361,12 @@ const THROW_DURATIONS = {
   seoi_nage:750, aikido_up:850, aikido_down:850, dragon_screw:850,
   koshi_nage:800, ura_nage:950, duck_tackle:900, achilles_lock:1050,
   powerbomb_special:1000,
+  counter_gi:800, counter_soldier:850, counter_mma:950, counter_hero:1050, counter_wrestler:1000,
 };
+const BIG_SHAKE_THROWS = new Set([
+  'ura_nage', 'achilles_lock', 'powerbomb_special',
+  'counter_gi', 'counter_soldier', 'counter_mma', 'counter_hero', 'counter_wrestler',
+]);
 
 function doThrow(thrower, target, kind, dmg){
   const now = performance.now();
@@ -1350,8 +1376,7 @@ function doThrow(thrower, target, kind, dmg){
                  targetX0:target.mesh.position.x, targetZ0:target.mesh.position.z,
                  dmg, applied:false };
   thrower.throwInfo = data; target.throwInfo = data;
-  shake(kind === 'ura_nage' || kind === 'achilles_lock' || kind === 'powerbomb_special' ? 0.2 : 0.12,
-        kind === 'achilles_lock' || kind === 'powerbomb_special' ? 280 : 200);
+  shake(BIG_SHAKE_THROWS.has(kind) ? 0.2 : 0.12, kind === 'achilles_lock' || kind === 'powerbomb_special' ? 280 : 200);
 }
 
 /* =========================================================
@@ -1515,6 +1540,17 @@ function animatePose(f){
       L.chest.rotation.x = lerp(L.chest.rotation.x, STANCE.chestLeanX + 0.3, strike);
       L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX - 0.4, 0.2);
       L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX - 0.4, 0.2);
+    } else if (f.costume === 'wrestler'){
+      // reaches forward into a wide grappling stance, ready to seize the opponent — holds
+      // through the whole windup since the grab itself executes instantly at resolution
+      // (transitioning to the 'throw' state, handled entirely by animateThrow from there)
+      L.armL.shoulder.rotation.x = lerp(STANCE.shoulderX, -(100 * Math.PI/180), chamber);
+      L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX, -(100 * Math.PI/180), chamber);
+      L.armL.elbow.rotation.x = lerp(STANCE.elbowX, 0.1, chamber);
+      L.armR.elbow.rotation.x = lerp(STANCE.elbowX, 0.1, chamber);
+      L.legR.hip.rotation.x = lerp(STANCE.frontHipX, STANCE.frontHipX - 0.15, chamber);
+      L.legL.hip.rotation.x = lerp(STANCE.backHipX, STANCE.backHipX - 0.15, chamber);
+      L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX + 0.15, chamber);
     }
     if (t >= 1){ f.state = 'idle'; f.mesh.position.y = 0; }
     return;
@@ -1770,9 +1806,51 @@ function animateThrow(f){
       f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
       f.mesh.rotation.z = lerp(0, dir * Math.PI*0.5, dropT);
       f.mesh.position.y = Math.sin(Math.PI*dropT) * 0.35;
-    } else { // powerbomb_special — the wrestler's ultimate: highest vertical lift of any
-      // throw, slammed down almost straight in place rather than carried far, so all the
-      // drama reads as raw power rather than distance
+    } else if (data.kind === 'powerbomb_special'){ // the wrestler's ultimate: highest vertical
+      // lift of any throw, slammed down almost straight in place rather than carried far, so
+      // all the drama reads as raw power rather than distance
+      const dir = data.targetX0 >= data.throwerX ? 1 : -1;
+      toX = data.throwerX + dir * 0.5;
+      const armT = Math.min(t * 1.1, 1);
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.x = lerp(0, Math.PI*1.5, armT);
+      f.mesh.position.y = Math.sin(Math.PI*armT) * 2.0;
+    } else if (data.kind === 'counter_gi'){
+      // redirects the chambered straight punch's own momentum — quick, tight throw to the side
+      const dir = data.targetX0 >= data.throwerX ? 1 : -1;
+      toX = data.throwerX + dir * 1.2;
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.z = lerp(0, dir * Math.PI*1.2, t);
+      f.mesh.position.y = Math.sin(Math.PI*t) * 1.1;
+    } else if (data.kind === 'counter_soldier'){
+      // catches the descending heel-drop kick and slams them down low
+      const dir = data.targetX0 >= data.throwerX ? 1 : -1;
+      toX = data.throwerX + dir * 0.8;
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.x = lerp(0, Math.PI*1.3, t);
+      f.mesh.position.y = Math.sin(Math.PI*t) * 1.0;
+    } else if (data.kind === 'counter_mma'){
+      // catches the airborne flying knee, spins them around mid-air and slams
+      const dir = data.targetX0 >= data.throwerX ? -1 : 1;
+      toX = data.throwerX + dir * 1.3;
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.y = lerp(0, Math.PI*2.5, t);
+      f.mesh.position.y = Math.sin(Math.PI*t) * 1.5;
+    } else if (data.kind === 'counter_hero'){
+      // the biggest, most decisive reversal — punishing the most telegraphed special of all
+      // with the highest arc and longest carry of any counter
+      const dir = data.targetX0 >= data.throwerX ? -1 : 1;
+      toX = data.throwerX + dir * 1.9;
+      f.mesh.position.x = lerp(data.targetX0, toX, t);
+      f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
+      f.mesh.rotation.x = lerp(0, -Math.PI*2.2, t);
+      f.mesh.position.y = Math.sin(Math.PI*t) * 1.8;
+    } else { // counter_wrestler — turns the powerbomb attempt back onto the wrestler themselves,
+      // deliberately mirroring powerbomb_special's own lift/slam so it reads as poetic justice
       const dir = data.targetX0 >= data.throwerX ? 1 : -1;
       toX = data.throwerX + dir * 0.5;
       const armT = Math.min(t * 1.1, 1);
@@ -2176,9 +2254,9 @@ function updateCpuAI(){
     if (Math.random() < useChance){ trySpecial(cpu); return; }
   }
 
-  if (player.state === 'attack' && !player.attackResolved && dist < 2.2){
+  if ((player.state === 'attack' || player.state === 'special') && !player.attackResolved && dist < 2.2){
     const r = Math.random();
-    if (r < cfg.counterChance){ tryThrow(cpu); return; } // attempt the stage-matched counter-throw
+    if (r < cfg.counterChance){ tryThrow(cpu); return; } // attempt the stage/special-matched counter-throw
     if (r < cfg.counterChance + cfg.guardChance){ cpu.guard = true; cpu.guardReleaseAt = now + 400; return; }
     axisShift(cpu, Math.random() < 0.5 ? -1 : 1);
     return;
