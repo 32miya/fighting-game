@@ -634,31 +634,40 @@ const STAGE_DEFS = {
    waist/obi always uses the fighter's own accentColor (P1/P2 color-coding),
    independent of costume, so the two sides stay visually distinguishable
    no matter which costume either of them is wearing. */
+// build: multipliers on the base (=1) rig dimensions — leg/arm scale the limb lengths,
+// thick scales limb (and hand/foot) radii, torso scales chest/hips/waist width+depth
+// (never height, so it never interacts with the leg-length ground-compensation math below).
+// gi keeps every factor at 1 so it stays pixel-identical to the original rig.
 const COSTUMES = {
   gi: {
     label:'道着ファイター',
     chest:0xf0ebe0, hips:0xf0ebe0, limb:0xf0ebe0,
     skin:0xe8b48c, glove:0xe8b48c, boot:0xe8b48c, extra:null,
+    build:{ leg:1.00, arm:1.00, thick:1.00, torso:1.00 },
   },
   wrestler: {
     label:'プロレスラー',
     chest:0x241f1a, hips:0x241f1a, limb:0xe8b48c,
     skin:0xe8b48c, glove:0xe8b48c, boot:0xffffff, extra:null,
+    build:{ leg:0.92, arm:1.08, thick:1.30, torso:1.22 }, // stocky powerhouse — short thick legs, big arms/chest
   },
   soldier: {
     label:'ソルジャー',
     chest:0x5c6b3f, hips:0x4a5636, limb:0x5c6b3f,
     skin:0xe8b48c, glove:0x3a2f22, boot:0x2a2a2a, extra:'helmet', extraColor:0x4a5636,
+    build:{ leg:1.00, arm:1.00, thick:0.98, torso:1.00 }, // standard athletic build
   },
   mma: {
     label:'総合格闘家',
     chest:0xe8b48c, hips:0x1a1a1a, limb:0xe8b48c,
     skin:0xe8b48c, glove:0x1a1a1a, boot:0xe8b48c, extra:null,
+    build:{ leg:1.06, arm:1.03, thick:0.90, torso:0.94 }, // lean and rangy
   },
   hero: {
     label:'ヒーロー',
     chest:0xffd23f, hips:0xffd23f, limb:0xffd23f,
     skin:0xe8b48c, glove:0xffffff, boot:0xffffff, extra:'cape', extraColor:0xff5e3a,
+    build:{ leg:1.10, arm:1.05, thick:0.90, torso:0.93 }, // tall, lean, plain-built hero silhouette
   },
 };
 
@@ -675,29 +684,47 @@ function buildFighterMesh(costumeKey, color){
   const bootMat = new THREE.MeshStandardMaterial({ color: costume.boot, roughness:0.6 });
   const hitMeshes = [];
 
+  // Base (scale=1) dimensions — identical to the original fixed numbers, so a build of
+  // all-1.0 factors (the `gi` costume) reproduces the rig exactly as before.
+  const build = costume.build || { leg:1, arm:1, thick:1, torso:1 };
+  const BASE_THIGH_LEN=0.30, BASE_THIGH_R=0.105, BASE_SHIN_LEN=0.30, BASE_SHIN_R=0.088;
+  const BASE_UPPER_LEN=0.24, BASE_UPPER_R=0.078, BASE_FORE_LEN=0.24, BASE_FORE_R=0.066;
+
+  const thighLen = BASE_THIGH_LEN * build.leg, thighR = BASE_THIGH_R * build.thick;
+  const shinLen = BASE_SHIN_LEN * build.leg, shinR = BASE_SHIN_R * build.thick;
+  const upperLen = BASE_UPPER_LEN * build.arm, upperR = BASE_UPPER_R * build.thick;
+  const foreLen = BASE_FORE_LEN * build.arm, foreR = BASE_FORE_R * build.thick;
+
+  // Longer/shorter legs must shift the whole upper body (hips+waist+chest, and everything
+  // that hangs off chest) up or down by the same amount the leg chain grew or shrank —
+  // otherwise taller/shorter legs would leave the feet floating above or sunk into the floor.
+  const defaultLegDrop = (BASE_THIGH_LEN + BASE_THIGH_R*2) + (BASE_SHIN_LEN + BASE_SHIN_R*2);
+  const legDrop = (thighLen + thighR*2) + (shinLen + shinR*2);
+  const torsoYDelta = legDrop - defaultLegDrop;
+
   // ---- 腰下 (hips / pelvis) ----
   const hips = new THREE.Group();
-  hips.position.set(0, 0.92, 0);
+  hips.position.set(0, 0.92 + torsoYDelta, 0);
   root.add(hips);
-  const hipsMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.24, 0.30), hipsMat);
+  const hipsMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44 * build.torso, 0.24, 0.30 * build.torso), hipsMat);
   hipsMesh.castShadow = true;
   hips.add(hipsMesh);
   hitMeshes.push(hipsMesh);
 
   // ---- ウエスト (waist) — doubles as the obi/belt ----
   const waist = new THREE.Group();
-  waist.position.set(0, 1.12, 0);
+  waist.position.set(0, 1.12 + torsoYDelta, 0);
   root.add(waist);
-  const waistMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.09, 4, 8), beltMat);
+  const waistMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.19 * build.torso, 0.09, 4, 8), beltMat);
   waistMesh.castShadow = true;
   waist.add(waistMesh);
   hitMeshes.push(waistMesh);
 
   // ---- バスト (chest) — also the upper-body lean pivot ----
   const chest = new THREE.Group();
-  chest.position.set(0, 1.28, 0);
+  chest.position.set(0, 1.28 + torsoYDelta, 0);
   root.add(chest);
-  const chestMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.27, 0.26, 4, 8), chestMat);
+  const chestMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.27 * build.torso, 0.26, 4, 8), chestMat);
   chestMesh.position.y = 0.23;
   chestMesh.castShadow = true;
   chest.add(chestMesh);
@@ -725,10 +752,9 @@ function buildFighterMesh(costumeKey, color){
   // ---- Arms: 肩(shoulder) → 肘(elbow) ----
   function buildArm(side){
     const shoulder = new THREE.Group();
-    shoulder.position.set(side * 0.33, 0.32, 0);
+    shoulder.position.set(side * 0.33 * build.torso, 0.32, 0); // shoulders ride outward with a wider/narrower chest
     chest.add(shoulder);
 
-    const upperLen = 0.24, upperR = 0.078;
     const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(upperR, upperLen, 4, 8), limbMat);
     upperArm.position.y = -(upperLen/2 + upperR);
     upperArm.castShadow = true;
@@ -739,13 +765,12 @@ function buildFighterMesh(costumeKey, color){
     elbow.position.y = -(upperLen + upperR*2);
     shoulder.add(elbow);
 
-    const foreLen = 0.24, foreR = 0.066;
     const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(foreR, foreLen, 4, 8), limbMat);
     forearm.position.y = -(foreLen/2 + foreR);
     forearm.castShadow = true;
     elbow.add(forearm);
 
-    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.088, 12, 12), gloveMat);
+    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.088 * build.thick, 12, 12), gloveMat);
     fist.position.y = -(foreLen + foreR*2);
     fist.castShadow = true;
     elbow.add(fist);
@@ -758,10 +783,9 @@ function buildFighterMesh(costumeKey, color){
   // ---- Legs: 股関節(hip) → 膝(knee) ----
   function buildLeg(side, zOffset){
     const hip = new THREE.Group();
-    hip.position.set(side * 0.22, -0.10, zOffset);
+    hip.position.set(side * 0.22 * build.torso, -0.10, zOffset); // stance widens with bulkier hips
     hips.add(hip);
 
-    const thighLen = 0.30, thighR = 0.105;
     const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(thighR, thighLen, 4, 8), limbMat);
     thigh.position.y = -(thighLen/2 + thighR);
     thigh.castShadow = true;
@@ -772,13 +796,12 @@ function buildFighterMesh(costumeKey, color){
     knee.position.y = -(thighLen + thighR*2);
     hip.add(knee);
 
-    const shinLen = 0.30, shinR = 0.088;
     const shin = new THREE.Mesh(new THREE.CapsuleGeometry(shinR, shinLen, 4, 8), limbMat);
     shin.position.y = -(shinLen/2 + shinR);
     shin.castShadow = true;
     knee.add(shin);
 
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.24), bootMat);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.14 * build.thick, 0.08, 0.24 * build.thick), bootMat);
     foot.position.set(0, -(shinLen + shinR*2), 0.05);
     foot.castShadow = true;
     knee.add(foot);
