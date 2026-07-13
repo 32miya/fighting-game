@@ -71,6 +71,10 @@
     position:relative; pointer-events:auto; font-size:16px; font-weight:700; padding:12px 28px; border-radius:30px;
     border:2px solid #ffd23f; background:#ffd23f22; color:#ffd23f; letter-spacing:.05em;
   }
+  #overlay button.ghost{
+    border-color:#ffffff55; color:#ccc; background:transparent; font-size:13px; padding:10px 22px;
+  }
+  #overlayBtnRow{ position:relative; display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
 
   #overlay.win h1#overlayTitle{
     font-size:clamp(30px,7.5vw,52px); font-weight:800;
@@ -273,7 +277,10 @@
     <h1 id="overlayTitle">3D POLYGON FIGHTER</h1>
     <p id="overlayScore"></p>
     <p id="overlaySub">タップして試合開始</p>
-    <button id="overlayBtn">START</button>
+    <div id="overlayBtnRow">
+      <button id="overlayBtn">START</button>
+      <button id="overlayTitleBtn" class="ghost">タイトルへ</button>
+    </div>
   </div>
 
   <div id="modeSelect">
@@ -1778,6 +1785,20 @@ document.getElementById('overlayBtn').addEventListener('pointerdown', (e) => {
   updatePipsUI();
   startRound();
 });
+document.getElementById('overlayTitleBtn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  SFX.tap();
+  document.getElementById('overlay').classList.remove('show', 'win', 'lose');
+  document.getElementById('confettiLayer').innerHTML = '';
+  player.wins = 0; cpu.wins = 0; roundNumber = 1;
+  updatePipsUI();
+  if (Net.isHost) netDisbandRoom('hostClosed');
+  else if (Net.isOnline) netLeaveRoom();
+  else {
+    matchState = 'intro';
+    document.getElementById('modeSelect').classList.remove('hide');
+  }
+});
 
 /* =========================================================
    Input: directional pad with double-tap detection
@@ -2081,8 +2102,26 @@ function netDisbandRoom(reason){
   document.getElementById('hostIdText').textContent = '-----';
   document.getElementById('controls').style.display = '';
   document.getElementById('spectatorChat').classList.add('hide');
+  document.getElementById('overlay').classList.remove('show', 'win', 'lose');
+  document.getElementById('confettiLayer').innerHTML = '';
   document.getElementById('modeSelect').classList.remove('hide');
   if (reason === 'timeout') flashCenterText('ルームの有効期限が切れました', '', 2500);
+}
+
+// Guest/spectator voluntarily heading back to the title — unlike netDisbandRoom this doesn't
+// notify anyone else (the host simply sees this connection close, same as any disconnect).
+function netLeaveRoom(){
+  if (Net.conn) Net.conn.close();
+  if (Net.peer){ Net.peer.destroy(); Net.peer = null; }
+  Net.isOnline = false; Net.isGuest = false; Net.isSpectator = false;
+  document.getElementById('waitHostPanel').classList.add('hide');
+  document.getElementById('onlinePanel').classList.add('hide');
+  document.getElementById('stageSelect').classList.add('hide');
+  document.getElementById('controls').style.display = '';
+  document.getElementById('spectatorChat').classList.add('hide');
+  document.getElementById('overlay').classList.remove('show', 'win', 'lose');
+  document.getElementById('confettiLayer').innerHTML = '';
+  document.getElementById('modeSelect').classList.remove('hide');
 }
 
 addEventListener('pagehide', () => {
@@ -2242,6 +2281,8 @@ function guestHandleMessage(msg){
       document.getElementById('stageSelect').classList.add('hide');
       document.getElementById('controls').style.display = '';
       document.getElementById('spectatorChat').classList.add('hide');
+      document.getElementById('overlay').classList.remove('show', 'win', 'lose');
+      document.getElementById('confettiLayer').innerHTML = '';
       document.getElementById('modeSelect').classList.remove('hide');
     }, 1500);
   }
