@@ -64,6 +64,33 @@
     100%{ transform:translate(-50%,-50%) scale(1); opacity:1; }
   }
 
+  /* big dramatic callout for a landed special move / counter / K.O. — distinct from the
+     plain #centerText used for ROUND/FIGHT/MISS so it reads as a bigger deal */
+  #specialCallout{
+    position:absolute; top:27%; left:50%; transform:translate(-50%,-50%) scale(.4);
+    font-size:clamp(24px,7vw,46px); font-weight:800; letter-spacing:.05em; color:#fff;
+    text-shadow:0 3px 10px #000, 0 0 20px currentColor, 0 0 40px currentColor;
+    opacity:0; pointer-events:none; z-index:16; white-space:nowrap;
+  }
+  #specialCallout.show{ animation:specialCalloutPop 900ms cubic-bezier(.2,1.4,.4,1) both; }
+  @keyframes specialCalloutPop{
+    0%{ transform:translate(-50%,-50%) scale(.4) rotate(-4deg); opacity:0; }
+    18%{ transform:translate(-50%,-50%) scale(1.18) rotate(2deg); opacity:1; }
+    28%{ transform:translate(-50%,-50%) scale(1) rotate(0deg); opacity:1; }
+    82%{ opacity:1; }
+    100%{ opacity:0; }
+  }
+
+  /* full-screen flash for impact frames (special hits / K.O.) */
+  #impactFlash{
+    position:fixed; inset:0; pointer-events:none; z-index:40; opacity:0; background:#fff;
+  }
+  #impactFlash.show{ animation:impactFlashPop var(--flash-ms,180ms) ease-out both; }
+  @keyframes impactFlashPop{ 0%{ opacity:.7; } 100%{ opacity:0; } }
+
+  .pip.pop{ animation:pipPop .5s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes pipPop{ 0%{ transform:scale(1); } 40%{ transform:scale(1.8); box-shadow:0 0 12px #ffd23f; } 100%{ transform:scale(1); } }
+
   #overlay{
     position:absolute; inset:0; display:none; align-items:center; justify-content:center;
     background:#000c; z-index:20; flex-direction:column; gap:14px; text-align:center; padding:20px;
@@ -289,6 +316,8 @@
 
   <div id="centerText"><div class="big"></div><div class="small"></div></div>
   <div id="comboCounter"></div>
+  <div id="specialCallout"></div>
+  <div id="impactFlash"></div>
   <div id="hint">横向き表示推奨 / Rotate for best experience</div>
   <div id="errBanner"></div>
 
@@ -952,6 +981,43 @@ function shake(mag, ms){
   if (Net.isHost) netSend({ t:'ev', name:'shake', mag, ms });
 }
 
+// Hit-stop: rather than threading a pause through every wall-clock timestamp the game already
+// uses (attackStart, specialStart, hitstunUntil, throwInfo.start, …), we just hold the very last
+// rendered frame for a beat — tick() keeps running (so the freeze ends on time) but skips the
+// render call. Simulation quietly keeps advancing behind the frozen frame, which is imperceptible
+// for the short durations this is used for (~100-200ms).
+let renderFreezeUntil = 0;
+function triggerHitStop(ms, skipBroadcast){
+  renderFreezeUntil = Math.max(renderFreezeUntil, performance.now() + ms);
+  if (Net.isHost && !skipBroadcast) netSend({ t:'ev', name:'hitstop', ms });
+}
+
+const impactFlashEl = document.getElementById('impactFlash');
+function flashImpact(color, ms, skipBroadcast){
+  impactFlashEl.style.background = color;
+  impactFlashEl.style.setProperty('--flash-ms', ms + 'ms');
+  impactFlashEl.classList.remove('show'); void impactFlashEl.offsetWidth; impactFlashEl.classList.add('show');
+  if (Net.isHost && !skipBroadcast) netSend({ t:'ev', name:'impactFlash', color, ms });
+}
+
+const specialCalloutEl = document.getElementById('specialCallout');
+let specialCalloutTimer = null;
+function flashImpactCallout(text, color, skipBroadcast){
+  clearTimeout(specialCalloutTimer);
+  specialCalloutEl.textContent = text;
+  specialCalloutEl.style.color = color;
+  specialCalloutEl.classList.remove('show'); void specialCalloutEl.offsetWidth; specialCalloutEl.classList.add('show');
+  specialCalloutTimer = setTimeout(() => specialCalloutEl.classList.remove('show'), 900);
+  if (Net.isHost && !skipBroadcast) netSend({ t:'ev', name:'specialCallout', text, color });
+}
+
+// The three effects above are usually triggered together for a landed special/counter/K.O.
+function showSpecialHitEffect(moveName){
+  triggerHitStop(100);
+  flashImpact('#ffd23f', 180);
+  flashImpactCallout(moveName, '#ffd23f');
+}
+
 function faceOpponent(f){
   // 'special' is skipped too: mesh.lookAt() fully overwrites the root rotation every frame,
   // which would fight with (and instantly erase) the soldier's backflip rotation.x animation.
@@ -1227,6 +1293,12 @@ const SPECIAL_SPECS = {
   // of dealing damage directly like the strikes do
   wrestler:{ startup:450, active:1, recovery:280, dmg:40, reach:1.5, isGrab:true },
 };
+const SPECIAL_MOVE_NAMES = {
+  gi:'崩拳・極み', soldier:'宙返り蹴り', mma:'フライングニー', hero:'本気の一撃', wrestler:'パワーボム',
+};
+const SPECIAL_COUNTER_NAMES = {
+  gi:'捌き投げ', soldier:'蹴り足キャッチスラム', mma:'膝返し投げ', hero:'本気返し', wrestler:'リバーサル',
+};
 
 function trySpecial(f){
   if (f.guard || f.state !== 'idle') return;
@@ -1279,6 +1351,7 @@ function resolveSpecialHit(attacker){
   } else {
     shake(0.18, 260);
     SFX.heavyHit();
+    showSpecialHitEffect(SPECIAL_MOVE_NAMES[attacker.costume]);
     if (spec.knockdown){
       defender.state = 'knockdown';
       defender.knockdownStart = now2();
@@ -1394,7 +1467,13 @@ function applyDamage(f, dmg, cause){
     f.downType = (cause === 'throw') ? 'prone' : 'knees';
     matchState = 'roundEnd';
     SFX.ko();
-    setTimeout(() => endRound(f === player ? cpu : player), 900);
+    triggerHitStop(180);
+    flashImpact('#ff3b3b', 260);
+    flashImpactCallout('K.O.!', '#ff5e3a');
+    shake(0.28, 420);
+    // was 900ms — extended so the K.O. moment has room to breathe before the round-winner
+    // announcement cuts in, instead of the two blurring together
+    setTimeout(() => endRound(f === player ? cpu : player), 1500);
   }
 }
 
@@ -1874,6 +1953,8 @@ function animateThrow(f){
         SFX.throwHit();
         gainSpecialGauge(other(f), f, data.dmg);
         applyDamage(f, data.dmg, 'throw'); // may set f.state = 'down' if this KOs
+        if (data.kind === 'powerbomb_special') showSpecialHitEffect(SPECIAL_MOVE_NAMES.wrestler);
+        else if (data.kind.startsWith('counter_')) showSpecialHitEffect(SPECIAL_COUNTER_NAMES[data.kind.slice(8)]);
       }
       if (f.state !== 'down'){
         f.state = 'thrownDown';
@@ -2006,8 +2087,13 @@ function updateGaugeUI(){
   btnSpecial.classList.toggle('show', canUse);
 }
 function updatePipsUI(){
-  pipsP.forEach((el,i) => el.classList.toggle('on', i < player.wins));
-  pipsC.forEach((el,i) => el.classList.toggle('on', i < cpu.wins));
+  const applyPip = (el, isOn) => {
+    const wasOn = el.classList.contains('on');
+    el.classList.toggle('on', isOn);
+    if (isOn && !wasOn){ el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+  };
+  pipsP.forEach((el,i) => applyPip(el, i < player.wins));
+  pipsC.forEach((el,i) => applyPip(el, i < cpu.wins));
 }
 
 /* =========================================================
@@ -2056,10 +2142,15 @@ function endRound(winner){
     winner.victoryStart = performance.now();
     setTimeout(() => showFinalOverlay(winnerIsPlayerObj), 1600);
   } else {
-    flashCenterText(describeOutcome(winnerIsPlayerObj, false), '', 1400, true);
+    // names the round explicitly ("ROUND 1  YOU WIN") so it's never ambiguous which round
+    // just ended or who took it — describeOutcome() alone didn't say which round
+    const roundResultText = 'ROUND ' + roundNumber + '  ' + describeOutcome(winnerIsPlayerObj, false).replace(' ROUND', '');
+    flashCenterText(roundResultText, 'WINNER', 1800, true);
     if (Net.isHost) netSend({ t:'ev', name:'matchOutcome', winnerIsPlayerObj, isMatchEnd:false });
     roundNumber++;
-    setTimeout(startRound, 1800);
+    // was 1800ms total — stretched out (and with a deliberate quiet beat before the next
+    // "ROUND N" banner) so the two moments read as distinct instead of blurring together
+    setTimeout(startRound, 2600);
   }
 }
 
@@ -2581,9 +2672,17 @@ function guestHandleMessage(msg){
     else if (msg.name === 'chat') addDanmaku(msg.text);
     else if (msg.name === 'combo') showComboCounter(msg.n);
     else if (msg.name === 'costume') rebuildFighterMesh(msg.who === 'player' ? player : cpu, msg.key);
+    else if (msg.name === 'hitstop') triggerHitStop(msg.ms, true);
+    else if (msg.name === 'impactFlash') flashImpact(msg.color, msg.ms, true);
+    else if (msg.name === 'specialCallout') flashImpactCallout(msg.text, msg.color, true);
     else if (msg.name === 'matchOutcome'){
-      flashCenterText(describeOutcome(msg.winnerIsPlayerObj, msg.isMatchEnd), msg.isMatchEnd ? 'MATCH OVER' : '', msg.isMatchEnd ? 3000 : 1400, true);
-      if (msg.isMatchEnd) setTimeout(() => showFinalOverlay(msg.winnerIsPlayerObj), 1600);
+      if (msg.isMatchEnd){
+        flashCenterText(describeOutcome(msg.winnerIsPlayerObj, true), 'MATCH OVER', 3000, true);
+        setTimeout(() => showFinalOverlay(msg.winnerIsPlayerObj), 1600);
+      } else {
+        const roundResultText = 'ROUND ' + roundNumber + '  ' + describeOutcome(msg.winnerIsPlayerObj, false).replace(' ROUND', '');
+        flashCenterText(roundResultText, 'WINNER', 1800, true);
+      }
     }
   } else if (msg.t === 'stageChosen'){
     STAGE_DEFS[msg.stage].build(stageGroup);
@@ -2647,6 +2746,7 @@ function applyTween(f){
 
 function tick(){
   requestAnimationFrame(tick);
+  if (performance.now() < renderFreezeUntil) return; // hit-stop: hold the last rendered frame
   const dt = Math.min(clock.getDelta(), 0.05);
 
   if (Net.isGuest){
