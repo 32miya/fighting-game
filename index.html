@@ -49,13 +49,56 @@
   #overlay{
     position:absolute; inset:0; display:none; align-items:center; justify-content:center;
     background:#000c; z-index:20; flex-direction:column; gap:14px; text-align:center; padding:20px;
+    overflow:hidden;
   }
   #overlay.show{ display:flex; }
-  #overlay h1{ font-size:clamp(22px,5vw,34px); margin:0; letter-spacing:.05em; }
-  #overlay p{ margin:0; opacity:.75; font-size:14px; }
+  #overlay.win{ background:radial-gradient(ellipse at 50% 40%, #4a3400dd 0%, #000c 72%); }
+  #overlay h1{ position:relative; font-size:clamp(22px,5vw,34px); margin:0; letter-spacing:.05em; }
+  #overlay p{ position:relative; margin:0; opacity:.75; font-size:14px; }
   #overlay button{
-    pointer-events:auto; font-size:16px; font-weight:700; padding:12px 28px; border-radius:30px;
+    position:relative; pointer-events:auto; font-size:16px; font-weight:700; padding:12px 28px; border-radius:30px;
     border:2px solid #ffd23f; background:#ffd23f22; color:#ffd23f; letter-spacing:.05em;
+  }
+
+  #overlay.win h1#overlayTitle{
+    font-size:clamp(30px,7.5vw,52px); font-weight:800;
+    background:linear-gradient(90deg,#fff8d0,#ffd23f,#ff9a3f,#ffd23f,#fff8d0);
+    background-size:300% 100%; -webkit-background-clip:text; background-clip:text; color:transparent;
+    text-shadow:0 0 26px #ffd23f77;
+    animation:titleShine 2.2s linear infinite, titlePop .6s cubic-bezier(.34,1.56,.64,1) both;
+  }
+  @keyframes titleShine{ 0%{ background-position:0% 50%; } 100%{ background-position:300% 50%; } }
+  @keyframes titlePop{
+    0%{ transform:scale(.3) rotate(-8deg); opacity:0; }
+    60%{ transform:scale(1.15) rotate(3deg); opacity:1; }
+    100%{ transform:scale(1) rotate(0deg); }
+  }
+
+  #winBadge{
+    display:none; position:relative; font-size:13px; font-weight:800; letter-spacing:.25em;
+    padding:7px 20px; border-radius:20px; background:linear-gradient(90deg,#ffd23f,#ff9a3f);
+    color:#3a2400; box-shadow:0 0 22px #ffd23f99;
+  }
+  #overlay.win #winBadge{
+    display:inline-block; animation:badgeBounce .5s ease-out .35s both;
+  }
+  @keyframes badgeBounce{
+    0%{ transform:translateY(-16px) scale(.6); opacity:0; }
+    70%{ transform:translateY(2px) scale(1.06); opacity:1; }
+    100%{ transform:translateY(0) scale(1); }
+  }
+
+  #overlayScore{ font-size:clamp(22px,5.5vw,36px); font-weight:800; letter-spacing:.08em; color:#eef2ff; }
+  #overlay.win #overlayScore{ color:#ffd23f; text-shadow:0 2px 10px #000; }
+
+  #confettiLayer{ position:absolute; inset:0; overflow:hidden; pointer-events:none; z-index:0; }
+  .confettiPiece{
+    position:absolute; top:-6%; width:8px; height:14px; opacity:.95;
+    animation-name:confettiFall; animation-timing-function:ease-in; animation-fill-mode:forwards;
+  }
+  @keyframes confettiFall{
+    0%{ transform:translate(0,0) rotate(0deg); opacity:1; }
+    100%{ transform:translate(var(--drift,20px), 115vh) rotate(var(--spin,540deg)); opacity:.85; }
   }
 
   #stageSelect{
@@ -198,7 +241,10 @@
   <div id="errBanner"></div>
 
   <div id="overlay">
+    <div id="confettiLayer"></div>
+    <div id="winBadge">WINNER</div>
     <h1 id="overlayTitle">3D POLYGON FIGHTER</h1>
+    <p id="overlayScore"></p>
     <p id="overlaySub">タップして試合開始</p>
     <button id="overlayBtn">START</button>
   </div>
@@ -1494,17 +1540,41 @@ function endRound(winner){
   }
 }
 
+const CONFETTI_COLORS = ['#ffd23f','#ff8a4d','#4da6ff','#8a5eff','#8ee07a','#ff5e5e'];
+function spawnConfetti(count){
+  const layer = document.getElementById('confettiLayer');
+  for (let i = 0; i < count; i++){
+    const el = document.createElement('div');
+    el.className = 'confettiPiece';
+    el.style.left = (Math.random() * 100) + '%';
+    el.style.background = CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)];
+    el.style.setProperty('--drift', (Math.random() * 160 - 80) + 'px');
+    el.style.setProperty('--spin', (360 + Math.random() * 720) + 'deg');
+    el.style.animationDuration = (1.8 + Math.random() * 1.6) + 's';
+    el.style.animationDelay = (Math.random() * 0.5) + 's';
+    layer.appendChild(el);
+    el.addEventListener('animationend', () => el.remove());
+  }
+}
+
 function showFinalOverlay(){
-  document.getElementById('overlayTitle').textContent = (player.wins > cpu.wins ? 'YOU WIN THE MATCH' : 'CPU WINS THE MATCH');
+  const iWon = player.wins > cpu.wins;
+  document.getElementById('overlayTitle').textContent = iWon ? 'YOU WIN THE MATCH!' : 'CPU WINS THE MATCH';
+  document.getElementById('overlayScore').textContent = player.wins + ' - ' + cpu.wins;
   document.getElementById('overlaySub').textContent = 'タップしてもう一度';
   document.getElementById('overlayBtn').textContent = 'RESTART';
-  document.getElementById('overlay').classList.add('show');
+  const ov = document.getElementById('overlay');
+  ov.classList.toggle('win', iWon);
+  ov.classList.toggle('lose', !iWon);
+  ov.classList.add('show');
+  if (iWon) spawnConfetti(70);
 }
 
 document.getElementById('overlayBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   SFX.tap();
-  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('overlay').classList.remove('show', 'win', 'lose');
+  document.getElementById('confettiLayer').innerHTML = '';
   player.wins = 0; cpu.wins = 0; roundNumber = 1;
   updatePipsUI();
   startRound();
