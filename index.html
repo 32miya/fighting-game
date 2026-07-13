@@ -1084,27 +1084,29 @@ function animatePose(f){
 
     if (f.attackType === 'kick'){
       if (f.comboStage === 3){
-        // rolling sobat — the whole torso spins (hips+waist+chest, arms/head ride along
-        // as children of chest) while the rear leg snaps out at the top of the spin
-        L.hips.rotation.y = lerp(0, Math.PI*1.1, swing);
-        L.waist.rotation.y = lerp(0, Math.PI*1.1, swing);
-        L.chest.rotation.y = lerp(0, Math.PI*1.1, swing);
-        L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip - 0.2, swing);
+        // rolling sobat — a full 360° spin of the torso (hips+waist+chest, arms/head ride
+        // along as children of chest), landing the kick back at chest height like the
+        // stage-1 roundhouse rather than chambering higher like the stage-2 head kick.
+        L.hips.rotation.y = lerp(0, Math.PI*2, swing);
+        L.waist.rotation.y = lerp(0, Math.PI*2, swing);
+        L.chest.rotation.y = lerp(0, Math.PI*2, swing);
+        L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip, swing);
         L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
-        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.25, swing);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.15, swing);
         L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
         L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
         L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX - 0.2, 0.2);
         L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX - 0.2, 0.2);
       } else if (f.comboStage === 2){
-        // head kick — same roundhouse mechanics as stage 1 but chambers higher for the face
-        L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip - 0.3, swing);
+        // head kick — same roundhouse mechanics as stage 1 but chambers much higher so the
+        // foot rises past chest height up toward the opponent's face.
+        L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip - 0.8, swing);
         L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
         L.legL.hip.rotation.y = lerp(0, KICK_POSE.hipYaw + 0.25, swing);
         L.hips.rotation.y = lerp(0, KICK_POSE.waistYaw + 0.15, swing);
         L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
         L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
-        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.22, swing);
+        L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.4, swing);
         L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
         L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX, 0.2);
       } else {
