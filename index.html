@@ -1947,6 +1947,7 @@ function netCreateRoom(attempt){
       if (Net.expiryTimer){ clearTimeout(Net.expiryTimer); Net.expiryTimer = null; }
       conn.on('open', () => {
         conn.send({ t:'role', role:'player2' });
+        conn.send({ t:'ev', name:'costume', who:'player', key: player.costume }); // tell the guest what the host looks like
         updateHostStatusText();
         relabelHudForOnline();
         setTimeout(() => {
@@ -1960,6 +1961,8 @@ function netCreateRoom(attempt){
       conn.on('open', () => {
         Net.spectatorConns.push(conn);
         conn.send({ t:'role', role:'spectator' });
+        conn.send({ t:'ev', name:'costume', who:'player', key: player.costume });
+        conn.send({ t:'ev', name:'costume', who:'cpu', key: cpu.costume }); // may still be default 'gi' if the guest hasn't chosen yet
         updateHostStatusText();
       });
       conn.on('data', msg => hostHandleMessage(msg, conn));
@@ -2084,6 +2087,12 @@ const CHAT_COOLDOWN_MS = 1200;
 const chatCooldownByConn = new Map();
 
 function hostHandleMessage(msg, conn){
+  if (msg.t === 'costumeChoice'){
+    if (conn !== Net.guestConn) return; // only the designated player2 has a fighter to reskin
+    rebuildFighterMesh(cpu, msg.key);
+    netSend({ t:'ev', name:'costume', who:'cpu', key: msg.key }); // relay to guest (self-echo, harmless) + all spectators
+    return;
+  }
   if (msg.t === 'chat'){
     // allowed from the designated player2 connection or any accepted spectator connection
     if (conn !== Net.guestConn && !Net.spectatorConns.includes(conn)) return;
@@ -2124,6 +2133,7 @@ function guestHandleMessage(msg){
     else if (msg.name === 'flashHit') flashHit(msg.who === 'p' ? player : cpu);
     else if (msg.name === 'chat') addDanmaku(msg.text);
     else if (msg.name === 'combo') showComboCounter(msg.n);
+    else if (msg.name === 'costume') rebuildFighterMesh(msg.who === 'player' ? player : cpu, msg.key);
   } else if (msg.t === 'stageChosen'){
     STAGE_DEFS[msg.stage].build(stageGroup);
     document.getElementById('waitHostPanel').classList.add('hide');
@@ -2135,6 +2145,11 @@ function guestHandleMessage(msg){
     if (Net.isSpectator){
       document.getElementById('controls').style.display = 'none';
       document.getElementById('spectatorChat').classList.remove('hide');
+    } else {
+      // this client's own fighter is always `cpu` on a non-host client — reskin it to the
+      // costume chosen back in characterSelect, then tell the host (who relays it onward).
+      rebuildFighterMesh(cpu, myCostume);
+      netSend({ t:'costumeChoice', key: myCostume });
     }
     document.getElementById('onlinePanel').classList.add('hide');
     document.getElementById('waitHostPanel').classList.remove('hide');
@@ -2244,11 +2259,15 @@ document.getElementById('modeOnlineBtn').addEventListener('pointerdown', (e) => 
   document.getElementById('modeSelect').classList.add('hide');
   document.getElementById('characterSelect').classList.remove('hide');
 });
+let myCostume = 'gi'; // this client's own chosen look — applied to `player` offline/as host, to `cpu` as an online guest
 document.querySelectorAll('.characterBtn').forEach(btn => {
   btn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     SFX.tap();
-    rebuildFighterMesh(player, btn.dataset.costume);
+    myCostume = btn.dataset.costume;
+    // CPU mode: this client's own fighter is always `player`, so apply immediately.
+    // Online mode: host/guest isn't known yet — applied once that's settled (hostCreateBtn / role:'player2').
+    if (pendingMode !== 'online') rebuildFighterMesh(player, myCostume);
     document.getElementById('characterSelect').classList.add('hide');
     if (pendingMode === 'online') document.getElementById('onlinePanel').classList.remove('hide');
     else document.getElementById('difficultySelect').classList.remove('hide');
@@ -2290,6 +2309,7 @@ document.getElementById('disbandBtn').addEventListener('pointerdown', (e) => {
 document.getElementById('hostCreateBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   ensureAudio();
+  rebuildFighterMesh(player, myCostume); // this client's own fighter is always `player` when hosting
   netCreateRoom();
 });
 document.getElementById('joinBtn').addEventListener('pointerdown', (e) => {
