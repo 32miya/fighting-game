@@ -46,6 +46,18 @@
   #centerText.show .big{ animation: pop .5s ease-out forwards; }
   @keyframes pop{ 0%{ transform:scale(.4); opacity:0; } 60%{ transform:scale(1.12); opacity:1; } 100%{ transform:scale(1); opacity:1; } }
 
+  #comboCounter{
+    position:absolute; top:20%; left:50%; transform:translate(-50%,-50%) scale(.4);
+    font-size:clamp(20px,5.5vw,34px); font-weight:800; letter-spacing:.05em; color:#fff;
+    text-shadow:0 2px 8px #000, 0 0 16px #ff9a3fbb; opacity:0; pointer-events:none; z-index:6;
+  }
+  #comboCounter.show{ animation:comboPop .35s cubic-bezier(.34,1.56,.64,1) both; }
+  @keyframes comboPop{
+    0%{ transform:translate(-50%,-50%) scale(.4); opacity:0; }
+    60%{ transform:translate(-50%,-50%) scale(1.18); opacity:1; }
+    100%{ transform:translate(-50%,-50%) scale(1); opacity:1; }
+  }
+
   #overlay{
     position:absolute; inset:0; display:none; align-items:center; justify-content:center;
     background:#000c; z-index:20; flex-direction:column; gap:14px; text-align:center; padding:20px;
@@ -237,6 +249,7 @@
   </div>
 
   <div id="centerText"><div class="big"></div><div class="small"></div></div>
+  <div id="comboCounter"></div>
   <div id="hint">横向き表示推奨 / Rotate for best experience</div>
   <div id="errBanner"></div>
 
@@ -740,7 +753,9 @@ class Fighter{
     this.comboExpireAt = 0;    // pressing the same button again before this time continues the combo
     this.queuedAction = null;  // buffered next-hit input pressed while mid-attack
     this.comboDecided = true;  // CPU-only: has this attack's combo-continue roll already happened
+    this.confirmedCombo = 0;   // count of hits that actually LANDED in the current string (not just presses)
     this.knockdownStart = 0;
+    this.victoryStart = 0;
     this.posTween = null;      // {fromX,fromZ,toX,toZ,start,duration}
     this.throwInfo = null;     // active throw animation data
     this.hitstunUntil = 0;
@@ -961,6 +976,7 @@ function startAttackStage(f, type, stage, now){
   f.attackResolved = false;
   f.queuedAction = null;
   f.comboDecided = false;
+  if (stage === 1) f.confirmedCombo = 0; // a fresh string from neutral resets the landed-hit count
   f.isDashAttack = now < f.dashBuffUntil;
   f.dashBuffUntil = 0;
   f.lastAttack = { type, stage, time:now };
@@ -1019,6 +1035,10 @@ function resolveAttackHit(attacker){
     defender.hitstunUntil = now2() + 260;
     shake(0.09, 150);
     attacker.attackType === 'kick' ? SFX.kick() : SFX.punch();
+  }
+  if (!defender.guard){
+    attacker.confirmedCombo++;
+    if (attacker.confirmedCombo >= 2) showComboCounter(attacker.confirmedCombo);
   }
   flashHit(defender);
   applyDamage(defender, dmg, attacker.attackType);
@@ -1149,6 +1169,26 @@ function animatePose(f){
   const L = f.mesh.userData.limbs;
   const now = performance.now();
   const lerp = THREE.MathUtils.lerp;
+
+  if (f.state === 'victory'){
+    // arms punch up overhead (continuing the same swing direction PUNCH_POSE already uses to
+    // bring the rear arm to horizontal-front, carried on further to fully overhead) and the
+    // chest puffs out/leans back — held indefinitely until the next round/restart resets it.
+    const el = THREE.MathUtils.clamp((now - f.victoryStart) / 500, 0, 1);
+    L.armL.shoulder.rotation.x = lerp(STANCE.shoulderX, -(168 * Math.PI/180), el);
+    L.armL.shoulder.rotation.z = lerp(L.armL.shoulder.rotation.z, 0.35, el);
+    L.armL.elbow.rotation.x = lerp(STANCE.elbowX, 0.12, el);
+    L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX, -(168 * Math.PI/180), el);
+    L.armR.shoulder.rotation.z = lerp(L.armR.shoulder.rotation.z, -0.35, el);
+    L.armR.elbow.rotation.x = lerp(STANCE.elbowX, 0.12, el);
+    L.chest.rotation.x = lerp(STANCE.chestLeanX, -0.22, el);
+    L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, -0.08, 0.15);
+    L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, 0.12, 0.15);
+    L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, -0.08, 0.15);
+    L.legL.knee.rotation.x = lerp(L.legL.knee.rotation.x, 0.12, 0.15);
+    f.mesh.position.y = Math.sin(now * 0.0025) * 0.035; // slow triumphant bob
+    return;
+  }
 
   if (f.state === 'attack'){
     const spec = getAttackSpec(f.attackType, f.comboStage);
@@ -1440,6 +1480,16 @@ function updateFlash(f){
   });
 }
 
+const comboCounterEl = document.getElementById('comboCounter');
+let comboCounterTimer = null;
+function showComboCounter(n){
+  clearTimeout(comboCounterTimer);
+  comboCounterEl.textContent = n + ' HIT COMBO!';
+  comboCounterEl.classList.remove('show'); void comboCounterEl.offsetWidth; comboCounterEl.classList.add('show');
+  comboCounterTimer = setTimeout(() => comboCounterEl.classList.remove('show'), 900);
+  if (Net.isHost) netSend({ t:'ev', name:'combo', n });
+}
+
 const centerText = document.getElementById('centerText');
 let centerTimer = null;
 function flashCenterText(big, small, ms){
@@ -1506,7 +1556,8 @@ function resetFighter(f, x){
   f.hp = 100; f.state = 'idle'; f.guard = false; f.posTween = null; f.throwInfo = null;
   f.attackResolved = true; f.downType = null; f.downStart = null;
   f.comboStage = 0; f.comboExpireAt = 0; f.queuedAction = null; f.comboDecided = true;
-  f.knockdownStart = 0; f.lastAttack = { type:null, stage:0, time:-9999 };
+  f.confirmedCombo = 0; f.knockdownStart = 0; f.victoryStart = 0;
+  f.lastAttack = { type:null, stage:0, time:-9999 };
   f.mesh.position.set(x, 0, 0);
   resetPose(f);
   updateFlash(f);
@@ -1532,6 +1583,8 @@ function endRound(winner){
     matchState = 'matchEnd';
     flashCenterText((winner === player ? 'YOU WIN!' : 'CPU WINS'), 'MATCH OVER', 3000);
     SFX.win();
+    winner.state = 'victory';
+    winner.victoryStart = performance.now();
     setTimeout(showFinalOverlay, 1600);
   } else {
     flashCenterText((winner === player ? 'YOU WIN ROUND' : 'CPU WINS ROUND'), '', 1400);
@@ -1899,6 +1952,7 @@ function serializeFighter(f){
     downStart: f.downStart != null ? f.downStart : null,
     thrownDownStart: f.thrownDownStart != null ? f.thrownDownStart : null,
     knockdownStart: f.knockdownStart != null ? f.knockdownStart : null,
+    victoryStart: f.victoryStart != null ? f.victoryStart : null,
     throwInfo: f.throwInfo ? { ...f.throwInfo } : null,
     flashUntil:f.flashUntil,
     x:f.mesh.position.x, z:f.mesh.position.z,
@@ -1916,6 +1970,7 @@ function applyFighterSnapshot(f, snap, offset){
   f.downStart = snap.downStart != null ? snap.downStart + offset : null;
   f.thrownDownStart = snap.thrownDownStart != null ? snap.thrownDownStart + offset : null;
   f.knockdownStart = snap.knockdownStart != null ? snap.knockdownStart + offset : null;
+  f.victoryStart = snap.victoryStart != null ? snap.victoryStart + offset : null;
   f.throwInfo = snap.throwInfo ? { ...snap.throwInfo, start: snap.throwInfo.start + offset } : null;
   f.flashUntil = snap.flashUntil + offset;
   f.netTargetX = snap.x; f.netTargetZ = snap.z;
@@ -1975,6 +2030,7 @@ function guestHandleMessage(msg){
     else if (msg.name === 'shake') shake(msg.mag, msg.ms);
     else if (msg.name === 'flashHit') flashHit(msg.who === 'p' ? player : cpu);
     else if (msg.name === 'chat') addDanmaku(msg.text);
+    else if (msg.name === 'combo') showComboCounter(msg.n);
   } else if (msg.t === 'stageChosen'){
     STAGE_DEFS[msg.stage].build(stageGroup);
     document.getElementById('waitHostPanel').classList.add('hide');
