@@ -406,10 +406,14 @@ document.addEventListener('gesturechange', (e) => e.preventDefault());
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('dragstart', (e) => e.preventDefault());
 document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
+// 300ms was too tight once combos rewarded mashing the same button with gaps well past that
+// (the combo-continue window is several hundred ms longer), so taps spaced e.g. 350-450ms
+// apart slipped past this guard and still triggered the OS's native double-tap-zoom.
 let lastTouchEnd = 0;
 document.addEventListener('touchend', (e) => {
+  if (e.target.tagName === 'INPUT') return; // never block focus/keyboard on text fields (chat, room code)
   const now = Date.now();
-  if (now - lastTouchEnd <= 300) e.preventDefault();
+  if (now - lastTouchEnd <= 600) e.preventDefault();
   lastTouchEnd = now;
 }, { passive:false });
 
@@ -1986,6 +1990,11 @@ function netCreateRoom(attempt){
         conn.send({ t:'role', role:'spectator' });
         conn.send({ t:'ev', name:'costume', who:'player', key: player.costume });
         conn.send({ t:'ev', name:'costume', who:'cpu', key: cpu.costume }); // may still be default 'gi' if the guest hasn't chosen yet
+        // a spectator connecting after the match already started would otherwise never see
+        // 'stageChosen' (that broadcast already fired before they joined) and their tick()
+        // loop — which only ever starts inside that handler — would never begin, leaving
+        // their screen blank forever. Catch them up directly if a stage is already active.
+        if (currentStageKey) conn.send({ t:'stageChosen', stage: currentStageKey });
         updateHostStatusText();
       });
       conn.on('data', msg => hostHandleMessage(msg, conn));
@@ -2253,6 +2262,7 @@ function tick(){
   renderer.render(scene, camera);
 }
 
+let currentStageKey = null; // tracked so a spectator connecting mid-match can be caught up immediately
 document.querySelectorAll('.stageBtn').forEach(btn => {
   let picked = false;
   btn.addEventListener('pointerdown', (e) => {
@@ -2260,7 +2270,7 @@ document.querySelectorAll('.stageBtn').forEach(btn => {
     if (picked) return; // guard against a duplicate pointerdown + click firing
     picked = true;
     try { ensureAudio(); SFX.tap(); } catch (err) { console.error('audio init failed:', err); showErrBanner('audio: ' + err.message); }
-    try { clearStage(); STAGE_DEFS[btn.dataset.stage].build(stageGroup); }
+    try { clearStage(); STAGE_DEFS[btn.dataset.stage].build(stageGroup); currentStageKey = btn.dataset.stage; }
     catch (err) { console.error('stage build failed:', err); showErrBanner('stage: ' + err.message); }
     document.getElementById('stageSelect').classList.add('hide');
     if (Net.isHost) netSend({ t:'stageChosen', stage: btn.dataset.stage });
