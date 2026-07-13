@@ -142,11 +142,11 @@
   #dLeft{ top:50px; left:0; } #dRight{ top:50px; left:100px; }
 
   #actions .ctlBtn{ width:56px; height:56px; border-radius:50%; font-size:18px; }
-  #btnC{ top:0; left:47px; border-color:#4da6ff; color:#a9d4ff; }
-  #btnB{ top:47px; left:94px; border-color:#ff8a4d; color:#ffcaa8; }
-  #btnA{ top:94px; left:47px; border-color:#ff5e5e; color:#ffb3b3; }
-  #btnD{ top:47px; left:0px; border-color:#8a5eff; color:#d6c6ff; }
-  #btnC.active{ background:rgba(77,166,255,0.45); }
+  #btnC{ top:0; left:47px; border-color:#ff8a4d; color:#ffcaa8; }
+  #btnB{ top:47px; left:94px; border-color:#8a5eff; color:#d6c6ff; }
+  #btnA{ top:94px; left:47px; border-color:#4da6ff; color:#a9d4ff; }
+  #btnD{ top:47px; left:0px; border-color:#ff5e5e; color:#ffb3b3; }
+  #btnA.active{ background:rgba(77,166,255,0.45); }
 </style>
 </head>
 <body>
@@ -224,10 +224,10 @@
       <div class="ctlBtn" id="dDown">▼</div>
     </div>
     <div id="actions">
-      <div class="ctlBtn" id="btnC">G</div>
-      <div class="ctlBtn" id="btnB">K</div>
-      <div class="ctlBtn" id="btnA">P</div>
-      <div class="ctlBtn" id="btnD">N</div>
+      <div class="ctlBtn" id="btnC">K</div>
+      <div class="ctlBtn" id="btnB">N</div>
+      <div class="ctlBtn" id="btnA">G</div>
+      <div class="ctlBtn" id="btnD">P</div>
     </div>
   </div>
 </div>
@@ -1332,10 +1332,10 @@ function bindAction(id, actionName, isGuard){
     el.addEventListener('pointercancel', release);
   }
 }
-bindAction('btnA', 'punch');
-bindAction('btnB', 'kick');
-bindAction('btnC', null, true);
-bindAction('btnD', 'throw');
+bindAction('btnA', null, true);
+bindAction('btnB', 'throw');
+bindAction('btnC', 'kick');
+bindAction('btnD', 'punch');
 
 /* =========================================================
    Continuous walk (single hold) — shared by local player input
