@@ -1779,28 +1779,35 @@ function animatePose(f){
 
     if (f.attackType === 'kick'){
       if (f.comboStage === 3){
-        // rolling sobat — a full 360° spin of the torso (hips+waist+chest, arms/head ride
-        // along as children of chest), landing the kick back at chest height like the
-        // stage-1 roundhouse rather than chambering higher like the stage-2 head kick.
+        // rolling sobat (ローリングソバット) — a jumping spin kick: the whole body leaves the
+        // ground and spins through the horizontal plane while airborne, landing back on the
+        // feet. Without the jump this is indistinguishable from a standing spin/back kick
+        // (a pivot-in-place spin) — the jump is what makes it read as "rolling" rather than
+        // just a grounded turn, even though both share the same 360° yaw of hips/waist/chest.
+        f.mesh.position.y = Math.sin(Math.PI * t) * 0.5;
         L.hips.rotation.y = lerp(0, Math.PI*2, swing);
         L.waist.rotation.y = lerp(0, Math.PI*2, swing);
         L.chest.rotation.y = lerp(0, Math.PI*2, swing);
         L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip, swing);
         L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
         L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.15, swing);
-        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
-        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX - 0.5, swing);
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX + 0.3, swing);
         L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX - 0.2, 0.2);
         L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX - 0.2, 0.2);
       } else if (f.comboStage === 2){
         // head kick — same roundhouse mechanics as stage 1 but chambers much higher so the
-        // foot rises past chest height up toward the opponent's face.
+        // foot rises past chest height up toward the opponent's face. A real head-height
+        // roundhouse gets its height and reach from turning the hips over hard, which requires
+        // the support leg (legR) to pivot on the ball of the foot and straighten out — left at
+        // its normal stance bend/facing, the kick has nowhere to go but stays low and frontal.
         L.legL.hip.rotation.x = lerp(STANCE.backHipX, KICK_POSE.hip - 0.8, swing);
         L.legL.knee.rotation.x = lerp(STANCE.backKneeX, KICK_POSE.knee, swing);
-        L.legL.hip.rotation.y = lerp(0, KICK_POSE.hipYaw + 0.25, swing);
-        L.hips.rotation.y = lerp(0, KICK_POSE.waistYaw + 0.15, swing);
-        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
-        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
+        L.legL.hip.rotation.y = lerp(0, KICK_POSE.hipYaw + 0.45, swing);
+        L.hips.rotation.y = lerp(0, KICK_POSE.waistYaw + 0.55, swing);
+        L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX + 0.1, 0.2);
+        L.legR.hip.rotation.y = lerp(L.legR.hip.rotation.y, 0.7, swing); // pivots the support foot into the turn
+        L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX * 0.3, swing); // straightens to let the hips rise
         L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.4, swing);
         L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
         L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX, 0.2);
