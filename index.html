@@ -823,17 +823,22 @@ function buildFighterMesh(costumeKey, color){
   chest.add(chestMesh);
   hitMeshes.push(chestMesh);
 
+  // ---- 首 (neck) — its own pivot so the head can snap/tuck/turn independently of the
+  // chest lean, instead of riding along rigidly as a fixed child of it ----
+  const neck = new THREE.Group();
+  neck.position.set(0, 0.5, 0);
+  chest.add(neck);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 16, 16), skinMat);
-  head.position.set(0, 0.62, 0);
+  head.position.set(0, 0.12, 0); // 0.5 + 0.12 = 0.62, same world offset as before the neck pivot existed
   head.castShadow = true;
-  chest.add(head);
+  neck.add(head);
 
   if (costume.extra === 'helmet'){
     const helmetMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.5 });
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.25, 14, 10, 0, Math.PI*2, 0, Math.PI*0.6), helmetMat);
-    helmet.position.set(0, 0.66, 0);
+    helmet.position.set(0, 0.16, 0); // follows the head off the neck pivot now
     helmet.castShadow = true;
-    chest.add(helmet);
+    neck.add(helmet);
   } else if (costume.extra === 'cape'){
     const capeMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.8, side: THREE.DoubleSide });
     const cape = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.5, 0.025), capeMat);
@@ -905,7 +910,7 @@ function buildFighterMesh(costumeKey, color){
   const legL = buildLeg(-1, -0.17);
   const legR = buildLeg(1, 0.17);
 
-  root.userData.limbs = { hips, waist, chest, head, armL, armR, legL, legR, hitMeshes };
+  root.userData.limbs = { hips, waist, chest, neck, head, armL, armR, legL, legR, hitMeshes };
   return root;
 }
 
@@ -1553,6 +1558,7 @@ function resetPose(f){
   L.legR.hip.rotation.set(0,0,0); L.legR.knee.rotation.set(0,0,0);
   L.chest.rotation.set(0,0,0);
   L.hips.rotation.set(0,0,0);
+  L.neck.rotation.set(0,0,0);
   f.mesh.position.y = 0;
   f.mesh.rotation.z = 0;
 }
@@ -1568,6 +1574,8 @@ function blendStance(f, rate){
   const lerp = THREE.MathUtils.lerp;
   const guardT = f.guard ? 1 : 0;
   L.chest.rotation.x = lerp(L.chest.rotation.x, STANCE.chestLeanX + guardT*0.05, rate);
+  // guarding tucks the chin down behind the raised arms; otherwise the head rides level
+  L.neck.rotation.x = lerp(L.neck.rotation.x, guardT * 0.3, rate);
   L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, rate);
   L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, rate);
   L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, rate);
@@ -1590,6 +1598,12 @@ function animatePose(f){
   const L = f.mesh.userData.limbs;
   const now = performance.now();
   const lerp = THREE.MathUtils.lerp;
+
+  // The neck continuously relaxes toward neutral every frame regardless of state; the
+  // hitstun branch below overrides it with an explicit snapped-back target for its duration,
+  // which naturally recovers once hitstun ends — no need to reset it in every state branch.
+  L.neck.rotation.x = lerp(L.neck.rotation.x, 0, 0.15);
+  L.neck.rotation.y = lerp(L.neck.rotation.y, 0, 0.15);
 
   if (f.state === 'victory'){
     // arms punch up overhead (continuing the same swing direction PUNCH_POSE already uses to
@@ -1637,11 +1651,16 @@ function animatePose(f){
       L.legL.hip.rotation.x = lerp(STANCE.backHipX, STANCE.backHipX - 0.25, chamber);
       L.legL.knee.rotation.x = lerp(STANCE.backKneeX, STANCE.backKneeX + 0.25, chamber);
       L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX - 0.3, chamber);
+      L.hips.rotation.y = lerp(0, 0.3, chamber); // winds up away from the punch during the chamber...
+      L.chest.rotation.y = lerp(0, 0.22, chamber);
       L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX, STANCE.shoulderX + 0.5, chamber);
       L.armR.elbow.rotation.x = lerp(STANCE.elbowX, STANCE.elbowX - 0.7, chamber);
       L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, PUNCH_POSE.shoulder - 0.15, strike);
       L.armR.elbow.rotation.x = lerp(L.armR.elbow.rotation.x, PUNCH_POSE.elbow, strike);
       L.chest.rotation.x = lerp(L.chest.rotation.x, STANCE.chestLeanX + 0.25, strike);
+      L.hips.rotation.y = lerp(L.hips.rotation.y, -0.25, strike); // ...then unwinds hard the other way as the fist lands
+      L.chest.rotation.y = lerp(L.chest.rotation.y, -0.2, strike);
+      L.neck.rotation.y = lerp(0, 0.15, strike);
       L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
       L.armL.elbow.rotation.x = lerp(L.armL.elbow.rotation.x, STANCE.elbowX, 0.2);
     } else if (f.costume === 'hero'){
@@ -1656,6 +1675,9 @@ function animatePose(f){
       L.armR.shoulder.rotation.z = lerp(L.armR.shoulder.rotation.z, 0, strike);
       L.armR.elbow.rotation.x = lerp(L.armR.elbow.rotation.x, PUNCH_POSE.elbow, strike);
       L.chest.rotation.x = lerp(L.chest.rotation.x, STANCE.chestLeanX + 0.3, strike);
+      L.chest.rotation.y = lerp(0, -0.18, strike); // torso rotates into the downward slam
+      L.hips.rotation.y = lerp(0, -0.2, strike);
+      L.neck.rotation.x = lerp(0, 0.15, strike); // head drives down with the swing
       L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX, 0.2);
       L.armL.elbow.rotation.x = lerp(L.armL.elbow.rotation.x, STANCE.elbowX, 0.2);
       L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
@@ -1759,11 +1781,16 @@ function animatePose(f){
       }
     } else {
       if (f.comboStage === 3){
-        // uppercut — rear arm drives up from a low chamber instead of straight out
+        // uppercut — rear arm drives up from a low chamber instead of straight out; the hips/
+        // chest twist into the punch (opposite sign from the cross below, since armR mirrors
+        // armL) for a driving hip-shoulder rotation instead of an arm-only strike
         L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX + 0.3, PUNCH_POSE.shoulder - 0.5, swing);
         L.armR.shoulder.rotation.z = lerp(STANCE.shoulderZ, -STANCE.shoulderZ - 0.35, swing);
         L.armR.elbow.rotation.x = lerp(STANCE.elbowX + 0.6, PUNCH_POSE.elbow, swing);
         L.chest.rotation.x = lerp(STANCE.chestLeanX - 0.1, STANCE.chestLeanX + 0.22, swing);
+        L.hips.rotation.y = lerp(0, 0.22, swing);
+        L.chest.rotation.y = lerp(0, 0.16, swing);
+        L.neck.rotation.y = lerp(0, -0.12, swing);
         L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
         L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
         L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, 0.2);
@@ -1783,10 +1810,13 @@ function animatePose(f){
         L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX, 0.2);
         L.armR.elbow.rotation.x = lerp(L.armR.elbow.rotation.x, STANCE.elbowX, 0.2);
       } else {
-        // rear arm (armR) drives the elbow straight for a cross/jab
+        // rear arm (armR) drives the elbow straight for a cross/jab — a lighter torso twist
+        // than the uppercut's, quick and sharp rather than a full wind-up
         L.armR.shoulder.rotation.x = lerp(STANCE.shoulderX, PUNCH_POSE.shoulder, swing);
         L.armR.elbow.rotation.x = lerp(STANCE.elbowX, PUNCH_POSE.elbow, swing);
         L.chest.rotation.x = lerp(STANCE.chestLeanX, STANCE.chestLeanX + 0.08, swing);
+        L.hips.rotation.y = lerp(0, 0.14, swing);
+        L.chest.rotation.y = lerp(0, 0.1, swing);
         L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
         L.legR.knee.rotation.x = lerp(L.legR.knee.rotation.x, STANCE.frontKneeX, 0.2);
         L.legL.hip.rotation.x = lerp(L.legL.hip.rotation.x, STANCE.backHipX, 0.2);
@@ -1860,6 +1890,9 @@ function animatePose(f){
 
   if (f.state === 'hitstun'){
     L.chest.rotation.x = lerp(L.chest.rotation.x, STANCE.chestLeanX + 0.35, 0.3);
+    // head snaps sharply back on impact — the single biggest readability cue that a hit
+    // actually landed, since it overrides the neck's continuous relax-to-neutral above
+    L.neck.rotation.x = lerp(L.neck.rotation.x, -0.6, 0.5);
     L.armL.shoulder.rotation.x = lerp(L.armL.shoulder.rotation.x, STANCE.shoulderX - 0.5, 0.3);
     L.armR.shoulder.rotation.x = lerp(L.armR.shoulder.rotation.x, STANCE.shoulderX - 0.5, 0.3);
     L.legR.hip.rotation.x = lerp(L.legR.hip.rotation.x, STANCE.frontHipX, 0.2);
