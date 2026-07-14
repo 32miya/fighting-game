@@ -1959,7 +1959,7 @@ function animateThrow(f){
       const dir = data.targetX0 >= data.throwerX ? 1 : -1;
       toX = data.throwerX + dir * 0.7;
       f.mesh.position.x = lerp(data.targetX0, toX, t);
-      f.mesh.rotation.y = lerp(0, Math.PI*3, t);
+      f.mesh.rotation.y = lerp(0, Math.PI*2, t); // capped at one full turn — was 3π (1.5 turns), over-spun
       f.mesh.position.y = Math.sin(Math.PI*t) * 0.7;
     } else if (data.kind === 'koshi_nage'){
       // real hip throw: pulled onto the thrower's hip (mounted, feet off the ground), flipped
@@ -2035,7 +2035,7 @@ function animateThrow(f){
       toX = data.throwerX + dir * 1.3;
       f.mesh.position.x = lerp(data.targetX0, toX, t);
       f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
-      f.mesh.rotation.y = lerp(0, Math.PI*2.5, t);
+      f.mesh.rotation.y = lerp(0, Math.PI*2, t); // capped at one full turn — was 2.5π (1.25 turns), over-spun
       f.mesh.position.y = Math.sin(Math.PI*t) * 1.5;
     } else if (data.kind === 'counter_hero'){
       // the biggest, most decisive reversal — punishing the most telegraphed special of all
@@ -2044,7 +2044,7 @@ function animateThrow(f){
       toX = data.throwerX + dir * 1.9;
       f.mesh.position.x = lerp(data.targetX0, toX, t);
       f.mesh.position.z = lerp(data.targetZ0, data.throwerZ, t);
-      f.mesh.rotation.x = lerp(0, -Math.PI*2.2, t);
+      f.mesh.rotation.x = lerp(0, -Math.PI*2, t); // capped at one full turn — was 2.2π (1.1 turns), over-spun; the height/carry distance already set below make this read as the biggest throw without an extra partial spin
       f.mesh.position.y = Math.sin(Math.PI*t) * 1.8;
     } else { // counter_wrestler — turns the powerbomb attempt back onto the wrestler themselves,
       // deliberately mirroring powerbomb_special's own lift/inversion/slam so it reads as
