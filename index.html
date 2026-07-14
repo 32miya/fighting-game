@@ -88,6 +88,21 @@
   #impactFlash.show{ animation:impactFlashPop var(--flash-ms,180ms) ease-out both; }
   @keyframes impactFlashPop{ 0%{ opacity:.7; } 100%{ opacity:0; } }
 
+  /* location-tracked "HIT!"/"GUARD" popup — spawned at the defender's projected screen
+     position so success/failure of an attack reads clearly without watching the HP bar */
+  #hitPopupLayer{ position:fixed; inset:0; pointer-events:none; z-index:17; overflow:hidden; }
+  .hitPopup{
+    position:absolute; transform:translate(-50%,-50%) scale(.5); font-weight:800;
+    font-size:clamp(18px,4.5vw,28px); letter-spacing:.04em; white-space:nowrap;
+    text-shadow:0 2px 8px #000, 0 0 14px currentColor; animation:hitPopupFloat 650ms ease-out both;
+  }
+  @keyframes hitPopupFloat{
+    0%{ transform:translate(-50%,-50%) scale(.5) translateY(0); opacity:0; }
+    22%{ transform:translate(-50%,-50%) scale(1.15) translateY(-6px); opacity:1; }
+    35%{ transform:translate(-50%,-50%) scale(1) translateY(-10px); opacity:1; }
+    100%{ transform:translate(-50%,-50%) scale(1) translateY(-52px); opacity:0; }
+  }
+
   .pip.pop{ animation:pipPop .5s cubic-bezier(.34,1.56,.64,1); }
   @keyframes pipPop{ 0%{ transform:scale(1); } 40%{ transform:scale(1.8); box-shadow:0 0 12px #ffd23f; } 100%{ transform:scale(1); } }
 
@@ -318,6 +333,7 @@
   <div id="comboCounter"></div>
   <div id="specialCallout"></div>
   <div id="impactFlash"></div>
+  <div id="hitPopupLayer"></div>
   <div id="hint">横向き表示推奨 / Rotate for best experience</div>
   <div id="errBanner"></div>
 
@@ -1018,6 +1034,33 @@ function showSpecialHitEffect(moveName){
   flashImpactCallout(moveName, '#ffd23f');
 }
 
+// Projects a world position to CSS pixel coordinates against the current camera/canvas —
+// used so "HIT!"/"GUARD" popups can appear right where the blow actually landed, rather than
+// a fixed screen position, which is far easier to read at a glance than the full-screen flash.
+function screenPositionFor(worldPos){
+  const p = worldPos.clone().project(camera);
+  const rect = renderer.domElement.getBoundingClientRect();
+  return {
+    x: rect.left + (p.x * 0.5 + 0.5) * rect.width,
+    y: rect.top + (-p.y * 0.5 + 0.5) * rect.height,
+  };
+}
+
+const hitPopupLayerEl = document.getElementById('hitPopupLayer');
+function spawnHitPopup(f, text, color, skipBroadcast){
+  const worldPos = new THREE.Vector3(f.mesh.position.x, f.mesh.position.y + 1.35, f.mesh.position.z);
+  const { x, y } = screenPositionFor(worldPos);
+  const el = document.createElement('div');
+  el.className = 'hitPopup';
+  el.textContent = text;
+  el.style.color = color;
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+  el.addEventListener('animationend', () => el.remove());
+  hitPopupLayerEl.appendChild(el);
+  if (Net.isHost && !skipBroadcast) netSend({ t:'ev', name:'hitPopup', who: f === player ? 'p' : 'c', text, color });
+}
+
 function faceOpponent(f){
   // 'special' is skipped too: mesh.lookAt() fully overwrites the root rotation every frame,
   // which would fight with (and instantly erase) the soldier's backflip rotation.x animation.
@@ -1247,11 +1290,13 @@ function resolveAttackHit(attacker){
     dmg *= 0.3;
     shake(0.04, 100);
     SFX.guard();
+    spawnHitPopup(defender, 'GUARD', '#4da6ff');
   } else if (spec.knockdown){
     shake(0.14, 220);
     SFX.heavyHit();
     defender.state = 'knockdown';
     defender.knockdownStart = now2();
+    spawnHitPopup(defender, 'HIT!', '#ff5e3a');
   } else if (spec.knockback){
     shake(0.14, 220);
     SFX.heavyHit();
@@ -1259,11 +1304,13 @@ function resolveAttackHit(attacker){
     tweenPos(defender, defender.mesh.position.x + dir * spec.knockback * KNOCKBACK_STEP, defender.mesh.position.z, 260);
     defender.state = 'hitstun';
     defender.hitstunUntil = now2() + 420;
+    spawnHitPopup(defender, 'HIT!', '#ff5e3a');
   } else {
     defender.state = 'hitstun';
     defender.hitstunUntil = now2() + 260;
     shake(0.09, 150);
     attacker.attackType === 'kick' ? SFX.kick() : SFX.punch();
+    spawnHitPopup(defender, 'HIT!', '#ff5e3a');
   }
   if (!defender.guard){
     attacker.confirmedCombo++;
@@ -1348,10 +1395,12 @@ function resolveSpecialHit(attacker){
     dmg *= 0.3;
     shake(0.06, 120);
     SFX.guard();
+    spawnHitPopup(defender, 'GUARD', '#4da6ff');
   } else {
     shake(0.18, 260);
     SFX.heavyHit();
     showSpecialHitEffect(SPECIAL_MOVE_NAMES[attacker.costume]);
+    spawnHitPopup(defender, 'HIT!', '#ff5e3a');
     if (spec.knockdown){
       defender.state = 'knockdown';
       defender.knockdownStart = now2();
@@ -1969,6 +2018,7 @@ function animateThrow(f){
         applyDamage(f, data.dmg, 'throw'); // may set f.state = 'down' if this KOs
         if (data.kind === 'powerbomb_special') showSpecialHitEffect(SPECIAL_MOVE_NAMES.wrestler);
         else if (data.kind.startsWith('counter_')) showSpecialHitEffect(SPECIAL_COUNTER_NAMES[data.kind.slice(8)]);
+        spawnHitPopup(f, 'HIT!', '#ff5e3a');
       }
       if (f.state !== 'down'){
         f.state = 'thrownDown';
@@ -2689,6 +2739,7 @@ function guestHandleMessage(msg){
     else if (msg.name === 'hitstop') triggerHitStop(msg.ms, true);
     else if (msg.name === 'impactFlash') flashImpact(msg.color, msg.ms, true);
     else if (msg.name === 'specialCallout') flashImpactCallout(msg.text, msg.color, true);
+    else if (msg.name === 'hitPopup') spawnHitPopup(msg.who === 'p' ? player : cpu, msg.text, msg.color, true);
     else if (msg.name === 'matchOutcome'){
       if (msg.isMatchEnd){
         flashCenterText(describeOutcome(msg.winnerIsPlayerObj, true), 'MATCH OVER', 3000, true);
