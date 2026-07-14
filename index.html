@@ -735,13 +735,13 @@ const COSTUMES = {
   gi: {
     label:'道着ファイター',
     chest:0xf0ebe0, hips:0xf0ebe0, limb:0xf0ebe0,
-    skin:0xe8b48c, glove:0xe8b48c, boot:0xe8b48c, extra:null,
+    skin:0xe8b48c, glove:0xe8b48c, boot:0xe8b48c, extra:'headband', extraColor:0xd23c3c,
     build:{ leg:1.00, arm:1.00, thick:1.00, torso:1.00 },
   },
   wrestler: {
     label:'プロレスラー',
     chest:0x241f1a, hips:0x241f1a, limb:0xe8b48c,
-    skin:0xe8b48c, glove:0xe8b48c, boot:0xffffff, extra:null,
+    skin:0xe8b48c, glove:0xe8b48c, boot:0xffffff, extra:'straps', extraColor:0xd23c3c,
     build:{ leg:0.92, arm:1.08, thick:1.30, torso:1.22 }, // stocky powerhouse — short thick legs, big arms/chest
   },
   soldier: {
@@ -753,7 +753,7 @@ const COSTUMES = {
   mma: {
     label:'総合格闘家',
     chest:0xe8b48c, hips:0x1a1a1a, limb:0xe8b48c,
-    skin:0xe8b48c, glove:0x1a1a1a, boot:0xe8b48c, extra:null,
+    skin:0xe8b48c, glove:0x1a1a1a, boot:0xe8b48c, extra:'mohawk', extraColor:0x1a1a1a,
     build:{ leg:1.06, arm:1.03, thick:0.90, torso:0.94 }, // lean and rangy
   },
   hero: {
@@ -833,6 +833,9 @@ function buildFighterMesh(costumeKey, color){
   head.castShadow = true;
   neck.add(head);
 
+  // Each costume's "extra" is a single signature prop — the fastest way to make five
+  // similarly-built low-poly fighters read as distinct silhouettes at a glance, the way
+  // a mask/gi/jacket does in a game like Virtua Fighter, without modeling full garments.
   if (costume.extra === 'helmet'){
     const helmetMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.5 });
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.25, 14, 10, 0, Math.PI*2, 0, Math.PI*0.6), helmetMat);
@@ -845,6 +848,42 @@ function buildFighterMesh(costumeKey, color){
     cape.position.set(0, -0.05, -0.17); // -Z = behind (away from the opponent), hangs from the shoulders
     cape.castShadow = true;
     chest.add(cape);
+  } else if (costume.extra === 'headband'){
+    // dojo hachimaki: a ring wrapped around the forehead with two tails hanging off the back
+    const bandMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.6 });
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.238, 0.028, 8, 16), bandMat);
+    band.rotation.x = Math.PI/2; // lay the ring flat so it wraps horizontally around the head
+    band.position.set(0, 0.15, 0);
+    band.castShadow = true;
+    neck.add(band);
+    [-1, 1].forEach(side => {
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.16, 0.018), bandMat);
+      tail.position.set(side * 0.05, 0.05, -0.23);
+      tail.rotation.x = 0.35;
+      tail.castShadow = true;
+      neck.add(tail);
+    });
+  } else if (costume.extra === 'straps'){
+    // crossed wrestling straps over the chest — sit proud of the capsule's own surface radius,
+    // not flush with/inside it, otherwise the opaque chest mesh hides them entirely
+    const strapMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.6 });
+    const strapZ = 0.27 * build.torso * 1.2;
+    [Math.PI/4, -Math.PI/4].forEach(rot => {
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.56, 0.05), strapMat);
+      strap.position.set(0, 0.23, strapZ);
+      strap.rotation.z = rot;
+      strap.castShadow = true;
+      chest.add(strap);
+    });
+  } else if (costume.extra === 'mohawk'){
+    // a stiff center-ridge mohawk — reads as a distinct head silhouette from any angle.
+    // Head top sits at y=0.35 (0.12 center + 0.23 radius); centered higher than that so a
+    // clear crest pokes above the skull instead of being buried inside/flush with it.
+    const hairMat = new THREE.MeshStandardMaterial({ color: costume.extraColor, roughness:0.7 });
+    const mohawk = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.32), hairMat);
+    mohawk.position.set(0, 0.36, 0);
+    mohawk.castShadow = true;
+    neck.add(mohawk);
   }
 
   // ---- Arms: 肩(shoulder) → 肘(elbow) ----
