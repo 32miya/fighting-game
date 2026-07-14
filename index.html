@@ -217,11 +217,13 @@
     border:2px solid #ffffff44; color:#fff; letter-spacing:.02em;
   }
   .characterBtn:active{ transform:scale(0.96); }
-  .characterBtn[data-costume="gi"]{ background:linear-gradient(160deg,#f0ebe055,#c9a97d55); border-color:#e0c98a; }
-  .characterBtn[data-costume="wrestler"]{ background:linear-gradient(160deg,#ffd23f55,#24201a99); border-color:#ffd23f; }
-  .characterBtn[data-costume="soldier"]{ background:linear-gradient(160deg,#5c6b3f55,#2a3a2099); border-color:#8ee07a; }
-  .characterBtn[data-costume="mma"]{ background:linear-gradient(160deg,#e8b48c55,#1a1a1a99); border-color:#ff8a4d; }
-  .characterBtn[data-costume="hero"]{ background:linear-gradient(160deg,#ffd23f55,#ff5e3a55); border-color:#ff5e3a; }
+  /* swatches mirror each costume's actual chest/limb + signature-prop accent colors (see
+     COSTUMES) so the pick reads correctly before the match ever starts */
+  .characterBtn[data-costume="gi"]{ background:linear-gradient(160deg,#f0ebe088,#f0ebe055 55%,#d23c3c66); border-color:#e0c98a; }
+  .characterBtn[data-costume="wrestler"]{ background:linear-gradient(160deg,#e8b48c88,#241f1acc 55%,#d23c3c66); border-color:#c9a97d; }
+  .characterBtn[data-costume="soldier"]{ background:linear-gradient(160deg,#5c6b3f88,#4a563699); border-color:#8ee07a; }
+  .characterBtn[data-costume="mma"]{ background:linear-gradient(160deg,#e8b48c88,#1a1a1acc); border-color:#ff8a4d; }
+  .characterBtn[data-costume="hero"]{ background:linear-gradient(160deg,#ffd23f88,#ffd23f55 55%,#ff5e3a66); border-color:#ff5e3a; }
   .menuBtn{
     pointer-events:auto; font-size:15px; font-weight:700; padding:14px 30px; border-radius:16px;
     border:2px solid #ffd23f; background:#ffd23f18; color:#ffd23f; letter-spacing:.05em;
@@ -403,6 +405,7 @@
     <div class="netDivider">または</div>
     <input id="joinIdInput" placeholder="相手の6桁IDを入力" autocomplete="off" maxlength="6" inputmode="numeric" pattern="[0-9]*" />
     <button class="menuBtn" id="joinBtn">このIDに接続する</button>
+    <p style="margin:0;opacity:.8;font-size:12px;">対戦相手として満員（対戦中）の場合は、自動的に観戦者として入室します</p>
     <p class="netStatus" id="joinStatus"></p>
     <button class="menuBtn ghost" id="onlineBackBtn">戻る</button>
   </div>
@@ -1276,10 +1279,14 @@ const PUNCH_SPECS = [ null,
   { startup:110, active:80,  recovery:200, dmg:9,  reach:1.55 },                    // 2: cross (one-two)
   { startup:150, active:100, recovery:320, dmg:14, reach:1.5,  knockdown:true },    // 3: uppercut
 ];
+// Kick damage was 12/13/16 (41 total) vs punch's 8/9/14 (31 total) — a 32% higher combo
+// total for roughly the same time cost, ON TOP OF kicks already having longer reach and a
+// knockback bonus on the finisher. Trimmed so kicks trade raw damage-per-second for their
+// range/knockback utility, instead of getting both for free.
 const KICK_SPECS = [ null,
-  { startup:190, active:100, recovery:300, dmg:12, reach:1.85 },                    // 1: body roundhouse (unchanged)
-  { startup:175, active:100, recovery:290, dmg:13, reach:1.85 },                    // 2: head kick
-  { startup:230, active:110, recovery:360, dmg:16, reach:1.9,  knockback:2 },       // 3: rolling sobat
+  { startup:190, active:100, recovery:300, dmg:11, reach:1.85 },                    // 1: body roundhouse
+  { startup:175, active:100, recovery:290, dmg:12, reach:1.85 },                    // 2: head kick
+  { startup:230, active:110, recovery:360, dmg:13, reach:1.9,  knockback:2 },       // 3: rolling sobat
 ];
 function getAttackSpec(type, stage){
   const table = type === 'kick' ? KICK_SPECS : PUNCH_SPECS;
@@ -1393,7 +1400,10 @@ function now2(){ return performance.now(); }
 const SPECIAL_SPECS = {
   gi:      { startup:650, active:120, recovery:260, dmg:36, reach:1.6, knockdown:true },
   soldier: { startup:520, active:140, recovery:300, dmg:34, reach:1.9, knockdown:true },
-  mma:     { startup:420, active:130, recovery:280, dmg:36, reach:2.0, knockdown:true },
+  // was dmg:36, reach:2.0 — strictly better than soldier's (more damage, faster, longer
+  // reach, no tradeoff at all). Now the fastest and longest-reaching special in the game,
+  // but the weakest — a real speed/reach-for-power tradeoff against soldier and gi.
+  mma:     { startup:420, active:130, recovery:280, dmg:31, reach:1.95, knockdown:true },
   hero:    { startup:700, active:130, recovery:280, dmg:45, reach:1.6, knockdown:true },
   // grab-type — same windup/resolve pattern as the strikes (needed so it can be counter-timed
   // the same way), but at resolution it either executes a guaranteed throw or whiffs, instead
@@ -2587,6 +2597,23 @@ function updateHostStatusText(){
   document.getElementById('hostStatus').textContent = base + spec;
 }
 
+// PeerJS surfaces raw internal error codes (err.type) — translate the ones a player can
+// actually hit here into plain Japanese instead of leaking implementation detail like
+// "peer-unavailable" straight to the UI.
+const PEER_ERROR_MESSAGES = {
+  'peer-unavailable': '部屋が見つかりません。IDをご確認ください',
+  'network': 'ネットワークエラーが発生しました。通信状況をご確認ください',
+  'disconnected': '接続が切断されました',
+  'server-error': 'サーバーエラーが発生しました。時間をおいて再度お試しください',
+  'socket-error': '通信エラーが発生しました',
+  'socket-closed': '通信が切断されました',
+  'webrtc': '接続に失敗しました（WebRTCエラー）',
+  'browser-incompatible': 'このブラウザには対応していません',
+};
+function peerErrorMessage(err){
+  return PEER_ERROR_MESSAGES[err.type] || ('接続エラーが発生しました（' + err.type + '）');
+}
+
 function netCreateRoom(attempt){
   attempt = attempt || 0;
   document.getElementById('hostStatus').textContent = '接続準備中…';
@@ -2646,7 +2673,7 @@ function netCreateRoom(attempt){
 
   peer.on('error', err => {
     if (err.type === 'unavailable-id' && attempt < 5){ netCreateRoom(attempt + 1); return; }
-    document.getElementById('hostStatus').textContent = '接続エラー: ' + err.type;
+    document.getElementById('hostStatus').textContent = peerErrorMessage(err);
   });
 }
 
@@ -2663,7 +2690,7 @@ function netJoinRoom(hostId){
     conn.on('close', netHandleDisconnect);
   });
   Net.peer.on('error', err => {
-    document.getElementById('joinStatus').textContent = '接続エラー: ' + err.type;
+    document.getElementById('joinStatus').textContent = peerErrorMessage(err);
   });
 }
 
@@ -3034,7 +3061,7 @@ document.getElementById('joinBtn').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   ensureAudio();
   const id = document.getElementById('joinIdInput').value.trim();
-  if (!id) return;
+  if (!id){ document.getElementById('joinStatus').textContent = 'IDを入力してください'; return; }
   netJoinRoom(id);
 });
 document.getElementById('copyIdBtn').addEventListener('pointerdown', (e) => {
